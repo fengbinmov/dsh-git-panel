@@ -1,0 +1,14 @@
+# dsh-git-panel bundle patch: inserts the plugin row into the web profile
+# roster. Applied as a profile bundle layer (the `dsh.bundle.patch` manifest
+# field) over dsh-base; activate it with either
+#   dsh plugin --profile <name> add @fengbinmov/dsh-git-panel@latest
+#   dsh plugin --profile <name> add link:<absolute path to this package>
+#
+# The row is a bare plugin by package name: the node half (exports ".") runs in
+# the host process (the workspace-gated git service + the /gitpanel/* HTTP
+# routes), and the dsh.client declaration in package.json makes the browser half
+# (exports "./client", served at /plugins/<id>/client.js) load in the web GUI,
+# where it registers one more Conversation View next to Chat and Trajectory.
+- insert:
+    - id: ui-git-panel
+      name: '@fengbinmov/dsh-git-panel'

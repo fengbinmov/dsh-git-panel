@@ -1,0 +1,1368 @@
+/**
+ * Git view tab styles.
+ *
+ * Drawn in the SHELL'S idiom rather than beside it. The shell has no boxes: a
+ * surface is told apart by 1px hairlines of --dsw-alias-border-l1, action is a
+ * borderless pill that fills on hover (its own button metrics are height 24-28,
+ * 12px, radius 999px, disabled opacity .4), the active tab is a filled
+ * --dsw-alias-markdown-tag pill with no underline, and a raised surface is
+ * --dsw-alias-bg-layer-3 behind --dsw-elevation-prominent. The panel follows all
+ * four, so it reads as one more view of the same application instead of a
+ * framed widget inside it.
+ *
+ * What the panel sets itself is only what is genuinely git's: the add/remove
+ * tints and their rails, mixed from the state tokens so they hold up on both
+ * themes; and the rule that DATA — paths, oids, counts, line numbers, patch
+ * text — is set in --ds-font-family-code (the shell's code face, the one used
+ * by a fenced block in the conversation), while chrome stays in the UI face.
+ *
+ * Every class name here is consumed by the components; the module is compiled
+ * by lightningcss and the map is what the client bundle imports.
+ */
+
+.view {
+  /* One place per decision: ink, hairlines, the code face, the two tints. */
+  --git-add-ink: var(--dsw-alias-state-success-primary);
+  --git-del-ink: var(--dsw-alias-state-error-primary);
+  --git-add-bg: color-mix(in srgb, var(--dsw-alias-state-success-primary) 10%, transparent);
+  --git-del-bg: color-mix(in srgb, var(--dsw-alias-state-error-primary) 10%, transparent);
+  --git-hair: var(--dsw-alias-border-l1);
+  --git-hover: var(--dsw-alias-interactive-bg-hover);
+  --git-ink: var(--dsw-alias-label-primary);
+  --git-ink-2: var(--dsw-alias-label-secondary);
+  --git-ink-3: var(--dsw-alias-label-tertiary);
+  --git-ink-4: var(--dsw-alias-label-caption);
+  /* The shell's code face, never the generic monospace keyword: --ds-font-family-code
+     is what every path, oid and code line elsewhere in the shell is set in
+     (SF Mono / JetBrains Mono / Consolas, with the CJK faces behind them). */
+  --git-mono: var(--ds-font-family-code, monospace);
+  /* The shell's pane scrollbar pair. Custom properties inherit, so declaring the
+     pair once here dresses every scroller below. */
+  --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);
+  --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
+  display: flex;
+  flex-direction: column;
+  /* "flex: 1 1 0" rather than "height: 100%": a zero flex basis makes the panel
+     contribute no height of its own, so the view area sizes to the space the
+     shell gives it and the panel's own scrollers absorb the overflow.
+     "overflow: hidden" is what makes the automatic minimum size 0, which is what
+     actually permits the shrink. The official Trajectory view is sized the same
+     way (height:100%; min-height:0; overflow:hidden). */
+  flex: 1 1 0;
+  /* A FIXED floor covering the panel's own chrome at the sizes declared below:
+     header 32 (8 + 24) + tabs 39 (4 + 26 + 8 + 1) + commit box 97
+     (8 + 48 + 6 + 24 + 10 + 1) = 168, rounded up to 170. NOT
+     "min-height: min-content".
+     min-content resolves to the panel's whole CONTENT, and the content includes
+     the right-hand diff: with a long patch open the floor was 7333px, so the
+     panel could not be shorter than the patch. The shell's active-phase view area
+     is flex: 1 0 auto / min-height: auto, which adopts that floor, and the
+     conversation scroller then had ~6700px to scroll — the entire Git page became
+     a scroll region that had to be scrolled to reach the commit box (measured, the
+     user's report). A floor near the chrome height keeps the panel inside the
+     space above the composer while still guaranteeing that the chrome can always
+     be brought into view: below this height the outer scroller takes over, and
+     scrolling it reveals exactly the shortfall. */
+  min-height: 170px;
+  overflow: hidden;
+  /* Span the view area rather than the chat column.
+     --dsh-chat-content-width exists to keep the composer and the message column
+     in step with each other; a review surface (a file list beside a diff) only
+     loses working room by copying it, so the panel takes the whole view area,
+     inset 16px on each side so it does not sit against the edges. 8px below keeps
+     the composer's own space rather than butting the commit box against it.
+     No "width: 100%": the view area is a column flex container, so the item
+     stretches to the line minus these margins — a width plus margins would
+     overflow instead. */
+  margin: 0 16px 8px;
+  /* One hairline and one radius, the shell's way of ending a surface: a 4%-ink
+     outline no stronger than the separators inside it, and the composer card's
+     12px corner on all four sides (the panel is inset on every side, so it is a
+     card beside the composer, not an extension of the tab strip above it). */
+  box-sizing: border-box;
+  border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 12px;
+  background: var(--dsw-alias-bg-base);
+  color: var(--git-ink);
+  /* The shell's secondary content size, so the panel follows the reader's
+     font-size setting instead of pinning 13px. */
+  font-size: var(--dsh-content-font-size-secondary, 13px);
+  /* Unitless, so the panel's text stays in proportion if the reader has raised
+     the shell's content font size. The panel's own chrome heights are all
+     explicit (24px pills, 26px tabs) and do not ride on this, which is why the
+     min-height floor above can stay a fixed number. */
+  line-height: 1.5;
+}
+
+/* Hide the shell's chat-column width handles while this panel is on screen.
+   The two .wSkVaW_widthHandle strips exist to drag the CHAT COLUMN's width:
+   absolutely positioned siblings of the conversation scroller, pinned top to
+   bottom, z-index 8. On the Git tab the panel spans the whole view area, so the
+   chat column's width changes nothing on screen — but the strips still sit ON
+   TOP of the panel (the panel has no z-index of its own), where they paint their
+   hover line across it and, worse, take the pointer: the cursor turns into
+   col-resize over the file list and clicks there never reach the row.
+   Measured before the fix, in a 951px-wide panel: the strips covered x 96-136 and
+   x 864-904, and document.elementFromPoint at the centre of each returned the
+   strip rather than the panel — i.e. two 40px bands of the panel were dead.
+   The shell already treats a surface that owns the view this way
+   (.wSkVaW_root:has([data-conversation-composer-overlay]) .wSkVaW_widthHandle);
+   the panel is such a surface, so it hides them for as long as it is mounted.
+   [data-phase] is the shell root — an attribute selector because a class name
+   here would be hashed by CSS Modules — and :has() keeps the rule scoped to the
+   moments the Git panel is actually on screen. */
+[data-phase]:has([data-dsh-plugin='git-panel']) [data-width-handle] {
+  display: none;
+}
+
+/* ---------------------------------------------------------------- header */
+
+/* Click-away layer under the branch menu. fixed keeps it covering the whole
+   viewport regardless of the header's layout; the menu's higher z-index wins. */
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 15;
+  background: transparent;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  /* Fixed chrome: only the list/diff area absorbs the flex squeeze, so the
+     header can never be compressed by a tall change list. */
+  flex: none;
+  /* No bottom padding and no bottom border: the tab row below owns the single
+     hairline that closes the panel's chrome (see .tabs), so branch + tabs read as
+     one block instead of as two stacked boxes. */
+  padding: 8px 10px 0;
+}
+
+.branchWrap {
+  position: relative;
+}
+
+/* The branch is the panel's one always-visible control, so it carries the
+   shell's ghost-active fill (a permanent faint wash, no outline) and brightens
+   on hover; aria-expanded is already on the element, so the open menu needs no
+   extra state. */
+.branchButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 320px;
+  height: 24px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--dsw-alias-button-ghost-active-fill);
+  color: var(--git-ink);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.branchButton:hover,
+.branchButton[aria-expanded='true'] {
+  background: var(--dsw-alias-button-ghost-active-hover);
+}
+
+.branchLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--git-mono);
+}
+
+.branchMenu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 20;
+  width: 320px;
+  max-height: 380px;
+  overflow-y: auto;
+  padding: 4px;
+  /* A raised surface, exactly as the shell builds one: layer-3, a hairline of
+     border-l2, and its elevation token. */
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 12px;
+  background: var(--dsw-alias-bg-layer-3);
+  box-shadow: var(--dsw-elevation-prominent);
+}
+
+.branchRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.branchRow:hover {
+  background: var(--git-hover);
+}
+
+.branchRowCurrent {
+  color: var(--git-ink);
+  font-weight: 500;
+}
+
+.branchName {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--git-mono);
+  font-size: 12px;
+}
+
+.branchOps {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.branchOpButton {
+  height: 20px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--git-ink-3);
+  font: inherit;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.branchOpButton:hover:not(:disabled) {
+  background: var(--git-hover);
+  color: var(--git-ink);
+}
+
+.branchOpButton:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.sync {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--git-ink-4);
+  font-family: var(--git-mono);
+  font-size: 11px;
+}
+
+.syncAhead {
+  color: var(--dsw-alias-state-success-primary);
+}
+
+.syncBehind {
+  color: var(--dsw-alias-state-warn-primary);
+}
+
+.spacer {
+  flex: 1;
+}
+
+.toolbar {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* The shell's small button, minus its border: a 24px transparent pill that
+   fills on hover. Four of them sit in the header at once, which is exactly where
+   an outline per button used to turn the row into a box of boxes. */
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 24px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--git-ink-2);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.button:hover:not(:disabled) {
+  background: var(--git-hover);
+  color: var(--git-ink);
+}
+
+.button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.buttonPrimary {
+  background: var(--dsw-alias-button-primary-fill);
+  color: var(--dsw-alias-label-primary-foreground);
+  font-weight: 500;
+}
+
+.buttonPrimary:hover:not(:disabled) {
+  background: var(--dsw-alias-button-primary-hover);
+  color: var(--dsw-alias-label-primary-foreground);
+}
+
+.buttonDanger {
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.buttonDanger:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover-danger);
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.buttonTiny {
+  height: 20px;
+  padding: 0 7px;
+  font-size: 11px;
+}
+
+/* ----------------------------------------------------------- notices/tabs */
+
+.notice {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--git-hair);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.noticeError {
+  background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 10%, transparent);
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.noticeInfo {
+  color: var(--git-ink-2);
+}
+
+.noticeWarn {
+  background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 12%, transparent);
+  color: var(--dsw-alias-state-warn-primary);
+}
+
+.noticeText {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+/* The shell's tab strip, repeated one level down: 4px gaps, 26px filled pills,
+   no underline anywhere. Choosing between 更改 and 历史 should feel like
+   choosing between 对话 and 轨迹, because it is the same gesture. */
+.tabs {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px 8px;
+  border-bottom: 1px solid var(--git-hair);
+}
+
+.tab {
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--git-ink-2);
+  font: inherit;
+  cursor: pointer;
+}
+
+.tab:hover {
+  background: var(--git-hover);
+  color: var(--git-ink);
+}
+
+.tabActive,
+.tabActive:hover {
+  background: var(--dsw-alias-markdown-tag);
+  color: var(--git-ink);
+}
+
+.tabCount {
+  margin-left: 5px;
+  color: var(--git-ink-4);
+  font-family: var(--git-mono);
+  font-size: 11px;
+  font-weight: 400;
+}
+
+/* ------------------------------------------------------------- split body */
+
+/* The row that holds the two columns. The split itself rides on the two custom
+   properties, which the view sets from state: same unitless-share model as the
+   vertical split, so the browser turns the weights into pixels and the columns
+   always add up to the row. */
+.body {
+  --git-list-share: 0.85;
+  --git-detail-share: 1;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.listPane {
+  display: flex;
+  flex-direction: column;
+  flex: var(--git-list-share) 1 0;
+  /* A floor for the file paths, which are the reason the column exists. There is
+     no upper bound: the drag itself is what sets the split, and a wider list is
+     the user's call.
+     The floor yields to the row when the row is smaller than it: a min-width
+     larger than the row pushes the divider out of the row (past the panel's
+     clipped edge, where it cannot be grabbed again), so it is capped at the row
+     minus the divider's own 9px. */
+  min-width: min(220px, calc(100% - 9px));
+  min-height: 0;
+}
+
+.detailPane {
+  display: flex;
+  flex-direction: column;
+  flex: var(--git-detail-share) 1 0;
+  min-width: 0;
+  min-height: 0;
+  /* The floating line-action bar (see .lineActions) is positioned against this
+     pane and clipped to it, so the buttons can never be drawn over the rest of
+     the view however the panel or its scrollers move. */
+  position: relative;
+  overflow: hidden;
+}
+
+/* The hand-drag divider between the two columns: a real grab target (wider than
+   the line it draws) owning the col-resize cursor. It draws its own boundary, so
+   the list pane carries no border. */
+.paneDivider {
+  flex: none;
+  width: 9px;
+  position: relative;
+  cursor: col-resize;
+  user-select: none;
+}
+
+.paneDivider::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 4px;
+  width: 1px;
+  background: var(--git-hair);
+}
+
+/* The shell's splitter tells the pointer where it is by strengthening — never by
+   moving, and never by turning into a permanent brand-coloured bar. */
+.paneDivider:hover::after,
+.paneDividerActive::after {
+  left: 4px;
+  width: 1px;
+  background: var(--dsw-alias-label-caption);
+}
+
+.paneDividerActive::after {
+  background: var(--dsw-alias-brand-primary);
+}
+
+.scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.empty {
+  padding: 16px 12px;
+  color: var(--git-ink-4);
+  font-size: 12px;
+  text-align: center;
+}
+
+/* ------------------------------------------------------------------ files */
+
+/* The change groups split this box between them, and it is the flex context
+   that makes that work: each group carries flex: <share> 1 0, so the BROWSER
+   divides whatever height is left after the dividers. That is why nothing here
+   needs to know about header heights — the groups fill the list exactly, so
+   there is never a gap to leave or an overflow to scroll (the automatic
+   scrollbar below is only a safety valve for the rare case where several
+   groups' minimum heights cannot all fit). MEASURED in Chrome against the real
+   component: with two groups the valve never opens at a panel height of 400px
+   or more, and each further 20px of panel hands 10px to each group. */
+.groups {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* One group: a column that takes its share of the list and scrolls its own
+   rows. The share itself is an inline flex (it is per-group state).
+   min-height: min-content is stated explicitly because overflow: hidden
+   would otherwise resolve the automatic minimum to 0 and let the group be
+   squeezed below its own header plus one row (for an empty group, which has no
+   rows area, below its header). */
+.group {
+  display: flex;
+  flex-direction: column;
+  min-height: min-content;
+  overflow: hidden;
+  /* The group's own LED colour, read by .sectionHeader::before: amber for the
+     side git would call the worktree, green for the index. */
+  --git-group-ink: var(--git-ink-4);
+}
+
+.group[data-gitgraph-group='unstaged'] {
+  --git-group-ink: var(--dsw-alias-state-warn-primary);
+}
+
+.group[data-gitgraph-group='staged'] {
+  --git-group-ink: var(--dsw-alias-state-success-primary);
+}
+
+/* The rows area: whatever the header leaves of the group's share, scrolled.
+   The 64px floor keeps a couple of rows visible; MIN_GROUP_SHARE_FRACTION in
+   helpers.ts is the matching limit on the share side. An EMPTY group renders no
+   rows area at all — its note lives in the header — so its floor is one header
+   and the list needs no scroller on a short panel just because four groups are
+   on screen. */
+.groupRows {
+  flex: 1 1 0;
+  min-height: 64px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* The hand-drag divider between two adjacent groups. It is a real grab target
+   (wider than the line it draws) and owns the row-resize cursor. */
+.divider {
+  flex: none;
+  height: 9px;
+  position: relative;
+  cursor: row-resize;
+  user-select: none;
+}
+
+.divider::after {
+  content: '';
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  top: 4px;
+  height: 1px;
+  background: var(--git-hair);
+}
+
+.divider:hover::after,
+.dividerActive::after {
+  top: 4px;
+  height: 1px;
+  background: var(--dsw-alias-label-caption);
+}
+
+.dividerActive::after {
+  background: var(--dsw-alias-brand-primary);
+}
+
+/* The group's label: micro-caps in the subtitle ink, with a 5px LED in front of
+   it, instead of the filled band this used to be. The LED is the one cue that
+   survives not reading Chinese — amber is worktree, green is index.
+   Not sticky: each group's ROWS scroll (or not) on their own, and the header is
+   their sibling, so it stays put without sticky positioning. */
+.sectionHeader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px 3px;
+  color: var(--git-ink-3);
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  flex: none;
+}
+
+.sectionHeader::before {
+  content: '';
+  flex: none;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--git-group-ink);
+}
+
+.sectionCount {
+  color: var(--git-ink-4);
+  font-family: var(--git-mono);
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0;
+}
+
+.fileRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 10px 2px 8px;
+  border: 0;
+  width: 100%;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  /* The row's own height has to be independent of anything that appears on
+     hover, or the list jumps as the pointer moves down it: a floor of one text
+     line plus the padding. */
+  box-sizing: border-box;
+  min-height: 22px;
+}
+
+.fileRow:hover {
+  background: var(--git-hover);
+}
+
+/* The focused row — the one the detail pane is showing. It takes the shell's
+   pressed fill plus a 2px rail, which says which row it is without washing the
+   row in the skin's accent; the multi-row selection below reuses the same rail,
+   weaker. */
+.fileRowActive {
+  background: var(--dsw-alias-interactive-bg-active);
+  box-shadow: inset 2px 0 0 var(--dsw-alias-brand-primary);
+}
+
+/* One row of a multi-row selection. Deliberately weaker than .fileRowActive (the
+   focused row) so the row the detail pane is showing stays distinguishable
+   inside a large selection. Declared before it, so the focused row wins where
+   both apply. */
+.fileRowSelected {
+  background: color-mix(in srgb, var(--dsw-alias-brand-primary) 6%, transparent);
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--dsw-alias-brand-primary) 40%, transparent);
+}
+
+/* Drag-and-drop staging: the section is the drop zone, the row is the handle.
+   grab is declared after .fileRow's pointer so it wins at equal specificity — a
+   row is still click-to-select, but it also drags. */
+.fileRowDraggable {
+  cursor: grab;
+}
+
+.fileRowDragging {
+  opacity: 0.4;
+}
+
+/* A section that the in-flight row may land on. */
+.sectionDropArmed {
+  outline: 1px dashed var(--dsw-alias-border-l3);
+  outline-offset: -1px;
+}
+
+/* The section the pointer is actually over. */
+.sectionDropHover {
+  outline: 1px dashed var(--dsw-alias-brand-primary);
+  background: color-mix(in srgb, var(--dsw-alias-brand-primary) 6%, transparent);
+}
+
+/* What an EMPTY group says in the header, in the slot the live drag cue uses.
+   Keeping it in the header (rather than a rows area of its own) is what lets an
+   empty group be as short as one header: nothing is ever clipped, however small
+   a share the user drags it down to. */
+.sectionNote {
+  /* The header is uppercased and letterspaced; this is a sentence, not a label. */
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--git-ink-4);
+  font-weight: 400;
+}
+
+/* The live "release to stage N files" cue inside a group header. It sits in the
+   header's single flex row so showing it cannot change the header's height and
+   shift the list under the pointer mid-drag. A group with no rows shows it
+   whenever a row it can accept is travelling, since it has nothing else to say;
+   a group with rows shows it only under the pointer. The shell's accent token,
+   because this is live state rather than a colour the panel invented. */
+.dropInline {
+  color: var(--dsw-alias-state-business-primary);
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* git status --short's first column, set as the data it is: one mono glyph, a
+   fixed width so the paths line up, coloured by the state it stands for. */
+.badge {
+  flex-shrink: 0;
+  width: 12px;
+  text-align: center;
+  font-family: var(--git-mono);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 14px;
+}
+
+.badgeModified { color: var(--dsw-alias-state-warn-primary); }
+.badgeAdded { color: var(--dsw-alias-state-success-primary); }
+.badgeDeleted { color: var(--dsw-alias-state-error-primary); }
+.badgeRenamed { color: var(--dsw-alias-brand-primary); }
+.badgeUntracked { color: var(--git-ink-4); }
+.badgeConflicted { color: var(--dsw-alias-state-error-primary); }
+
+/* The path cell, shared by BOTH file lists — the Changes rows and the History
+   tab's review rows — so the two can never drift apart again. Two halves, so the
+   value that identifies the file, its name, always has room: clipping the whole
+   path instead used to keep the directory prefix and hide the name.
+   Mono at 12px, and the cell GROWS to take the row's free space, which pins
+   the +N -M pair that follows it to the row's right edge. Its own content stays
+   at the START of that space, hard against the badge: the row then reads left to
+   right — status, path, counts — and the free space sits between the path and the
+   counts instead of stranding the name hundreds of pixels from its own badge in
+   the wide Changes column. The directory takes the clipping, and since its own
+   ellipsis is at its start what stays visible of it is the deepest part — right
+   next to the file name. */
+.filePath {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  justify-content: flex-start;
+  overflow: hidden;
+  white-space: nowrap;
+  font-family: var(--git-mono);
+  font-size: 12px;
+}
+
+/* The directory: the half that gives way, and the dim half. */
+.fileDir {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  unicode-bidi: plaintext;
+  color: var(--git-ink-4);
+}
+
+/* The file name: never shortened, and the emphasised half of the pair — the
+   directory is context, the name is what the row is about. 500 rather than the
+   600 this used to be: at 12px mono, bold turned every path into a pieced
+   headline. */
+.fileName {
+  flex: none;
+  color: var(--git-ink);
+  font-weight: 500;
+}
+
+/* The row's +N -M counts. Rendered only when git reported counts for the path:
+   an untracked file appears in no diff, so its row shows none rather than a
+   misleading +0 -0. Tabular figures, so the columns of a list line up. */
+.fileStat {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--git-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Rows carry no buttons at all: every staging verb is a drag across the group
+   boundary, and discarding is Delete on the pending side. Hover-revealed buttons
+   shifted the row's contents (and, before they were sized to the text line, its
+   height) as the pointer moved down the list. */
+
+/* ------------------------------------------------------------ commit review */
+
+/* The History tab's review: a commit bar over the changed-file list and the
+   selected file's diff. It is the outer row's SECOND column, so it must carry
+   the same weight .detailPane does — with a hard-coded flex: 1 1 0 instead,
+   a dragged split (whose weights are pixel-sized, e.g. 300 against 380) was read
+   as "300 against 1": the commit column swallowed the panel, the divider was
+   pushed to the panel's clipped right edge, and the two tabs' dividers no longer
+   sat in the same place. */
+.reviewColumn {
+  display: flex;
+  flex-direction: column;
+  flex: var(--git-detail-share) 1 0;
+  min-width: 0;
+  min-height: 0;
+  /* The commit bar's own contents cannot shrink below their text, so without this
+     a squeezed review column would spill its bar past the panel's clipped edge
+     instead of shrinking. The diff pane keeps its own scroller either way. */
+  overflow: hidden;
+}
+
+/* The commit bar: who wrote it, which commit, and how much it changed. */
+.reviewBar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--git-hair);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.reviewAuthor {
+  color: var(--git-ink);
+  font-weight: 500;
+}
+
+.reviewGlyph {
+  flex: none;
+  width: 18px;
+  height: 12px;
+  stroke: var(--git-ink-4);
+  stroke-width: 1.25;
+  fill: none;
+}
+
+/* The circle is knocked out of the bar, so it takes the PANEL's surface: the bar
+   itself is transparent. */
+.reviewGlyph circle {
+  fill: var(--dsw-alias-bg-base);
+  stroke: var(--dsw-alias-brand-primary);
+}
+
+/* The short id doubles as the copy button. */
+.reviewOid {
+  padding: 1px 6px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--git-ink-2);
+  font: inherit;
+  font-family: var(--git-mono);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.reviewOid:hover {
+  background: var(--git-hover);
+  color: var(--git-ink);
+}
+
+.reviewStat {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--git-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The commit subject: one line, ellipsized, so the bar's height never depends on
+   the message. The full message (body included) is the bar's tooltip. */
+.reviewSubject {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--git-ink-2);
+}
+
+/* The row that splits into the file list and the diff. The same share model as
+   the list/detail row, with its own remembered values. */
+.reviewRow {
+  --git-list-share: 0.55;
+  --git-detail-share: 1;
+  display: flex;
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+.filesPane {
+  display: flex;
+  flex-direction: column;
+  flex: var(--git-list-share) 1 0;
+  /* Same rule as .listPane: a floor for the paths, capped so it can never push
+     the divider out of the row when the review column itself is squeezed. */
+  min-width: min(180px, calc(100% - 9px));
+  min-height: 0;
+}
+
+.filesHead {
+  flex: none;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--git-hair);
+  color: var(--git-ink-4);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.filesScroll {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* One changed file: status badge, path with the basename emphasised, +/- counts.
+   The path cell and the counts are the shared .filePath / .fileStat above —
+   the review list and the Changes list are the same row. */
+
+.reviewEmpty {
+  padding: 16px 12px;
+  color: var(--git-ink-4);
+  font-size: 12px;
+}
+
+.diffBlank {
+  padding: 12px 10px;
+  color: var(--git-ink-4);
+  font-size: 12px;
+}
+
+.diffPane {
+  display: flex;
+  flex-direction: column;
+  flex: var(--git-detail-share) 1 0;
+  min-width: 0;
+  min-height: 0;
+}
+
+.diffHead {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--git-hair);
+}
+
+.diffScroll {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+/* ----------------------------------------------------------------- the diff */
+
+.diff {
+  /* Rows may run past the pane's width: a diff line is one line, and the pane
+     scrolls sideways instead of wrapping it. */
+  min-width: max-content;
+  /* The shell's code typography, spelled out: 12px/19px in --ds-font-family-code
+     is what a fenced block in the conversation uses, so a patch here is
+     typographically the same object as the code the conversation quotes back. */
+  font-family: var(--git-mono);
+  font-size: 12px;
+  line-height: 19px;
+  font-variant-numeric: tabular-nums;
+}
+
+.diffRow {
+  display: flex;
+  align-items: flex-start;
+  width: max-content;
+  min-width: 100%;
+  /* Which colour this row's rail carries. A custom property rather than a
+     background on the rail itself, because the rail is a pseudo-element: the
+     add/del/chosen/in-range rules below could not out-specify the base
+     transparent if each one wrote its own background. */
+  --git-rail: transparent;
+}
+
+/* A 2px rail on the leading edge of every patch row. It is the one element that
+   carries the change colour at full strength, which is what keeps a row readable
+   when the pane is scrolled sideways past the line numbers. Not drawn on hunk
+   rows: those span the pane as separators, and the :not() keeps the rail out of
+   their own layout. */
+.diffRow:not([data-diff-kind='hunk'])::before {
+  content: '';
+  flex: none;
+  align-self: stretch;
+  width: 2px;
+  background: var(--git-rail);
+}
+
+/* The row wash is 10%: enough to carry the eye down the pane, faint enough that
+   the rail stays the signal. The 16% this used to be, on top of the gutter's own
+   30% tint, made every hunk a solid block of colour — and the selection wash
+   (below) then mixed brand over it into a third, muddier hue. */
+.diffRowAdd {
+  --git-rail: var(--git-add-ink);
+  background: var(--git-add-bg);
+}
+
+.diffRowDel {
+  --git-rail: var(--git-del-ink);
+  background: var(--git-del-bg);
+}
+
+.diffRowNote {
+  color: var(--git-ink-4);
+}
+
+/* Line selection, for the tab that can act on it.
+   The HANDLE is the gutter — the two number columns and the marker, blank cells
+   included — and the text beside it keeps the browser's ordinary selection: a
+   reader has to be able to select a few WORDS, and the pane-wide user-select: none
+   this started as made that impossible. A drag that begins on the gutter picks rows
+   and prevents the default, so the two gestures never fight; a drag that begins in
+   the text is not ours at all. The chosen rows are the ones an action applies to;
+   the context rows swept up in between are marked more faintly, because they are
+   carried along rather than acted on. */
+.diffSelectable [data-diff-gutter] {
+  cursor: row-resize;
+  user-select: none;
+}
+
+/* Say so on hover: the cursor is most of the cue, and a tint makes the gutter read as
+   a handle rather than as a column of numbers. */
+.diffSelectable [data-diff-gutter]:hover {
+  background: color-mix(in srgb, var(--dsw-alias-brand-primary) 10%, transparent);
+}
+
+/* The chosen rows keep their OWN hue, deepened, instead of taking a brand wash:
+   green and red already say what the line is, and the rail switching to brand is
+   what says it is picked. */
+.diffRowChosen {
+  --git-rail: var(--dsw-alias-brand-primary);
+  background: color-mix(in srgb, var(--dsw-alias-brand-primary) 10%, transparent);
+}
+
+.diffRowChosen.diffRowAdd {
+  background: color-mix(in srgb, var(--git-add-ink) 22%, transparent);
+}
+
+.diffRowChosen.diffRowDel {
+  background: color-mix(in srgb, var(--git-del-ink) 22%, transparent);
+}
+
+/* And the gutter goes to full-contrast ink, so a picked line's numbers read as
+   picked even where the wash is faint. */
+.diffRowChosen .diffNum,
+.diffRowChosen .diffMark {
+  color: var(--git-ink);
+}
+
+.diffRowInRange {
+  --git-rail: color-mix(in srgb, var(--dsw-alias-brand-primary) 40%, transparent);
+  background: color-mix(in srgb, var(--dsw-alias-brand-primary) 6%, transparent);
+}
+
+/* The bar that appears at the top-right of a selection. Absolute, not fixed: it is
+   positioned against .detailPane — the nearest positioned ancestor, which also
+   clips it — so the buttons stay inside the preview. The diff scrolls sideways
+   inside a container that clips, and the bar has to look anchored to the pane at
+   the selection's height, which is what the effect that positions it keeps true
+   through any scroll. Built like the branch menu: layer-3, a border-l2 hairline,
+   the shell's elevation. */
+.lineActions {
+  position: absolute;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 3px 3px 8px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 10px;
+  background: var(--dsw-alias-bg-layer-3);
+  box-shadow: var(--dsw-elevation-prominent);
+}
+
+.lineCount {
+  color: var(--git-ink-4);
+  font-family: var(--git-mono);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+/* The gutter no longer tints itself: the row's wash and rail already say what the
+   line is, and two tinted 44px columns on every changed row were the single
+   heaviest thing on the page. The numbers and the marker take the state's ink
+   instead — the git convention, at 12px. */
+.diffNum {
+  flex: none;
+  /* Stretch to the row so the WHOLE gutter is the handle. An empty cell — the
+     side a row does not exist on — has no line box of its own, and with the
+     row's align-items: flex-start it would otherwise be zero-height: the blank
+     half of the gutter would stop answering the pointer, which is exactly the
+     half a reader aims at for an added or deleted line. */
+  align-self: stretch;
+  width: 44px;
+  padding: 0 6px 0 0;
+  text-align: right;
+  color: var(--git-ink-4);
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+
+.diffRowAdd .diffNum,
+.diffRowAdd .diffMark {
+  color: var(--git-add-ink);
+}
+
+.diffRowDel .diffNum,
+.diffRowDel .diffMark {
+  color: var(--git-del-ink);
+}
+
+.diffMark {
+  flex: none;
+  /* Full height for the same reason as .diffNum; a context row's marker is a
+     space and would otherwise collapse to nothing. */
+  align-self: stretch;
+  width: 16px;
+  text-align: center;
+  color: var(--git-ink-3);
+  user-select: none;
+}
+
+.diffText {
+  flex: 1;
+  padding-right: 16px;
+  white-space: pre;
+  color: var(--git-ink);
+}
+
+/* A hunk header is a separator, not a line: it spans the pane and reads as the
+   range it opens. Sticky, so the range stays on screen down a long hunk — which
+   is why its background has to be OPAQUE (bg-base under a 4% wash) rather than
+   one of the translucent tints the row styles use. */
+.diffRow[data-diff-kind='hunk'] {
+  position: sticky;
+  left: 0;
+  width: 100%;
+  min-width: 100%;
+  padding: 3px 10px;
+  border-top: 1px solid var(--git-hair);
+  border-bottom: 1px solid var(--git-hair);
+  background: color-mix(in srgb, var(--dsw-alias-label-primary) 4%, var(--dsw-alias-bg-base));
+  color: var(--git-ink-4);
+  font-size: 11px;
+}
+
+.diffRow[data-diff-kind='hunk'] .diffNum,
+.diffRow[data-diff-kind='hunk'] .diffMark {
+  width: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+.diffRow[data-diff-kind='hunk'] .diffText {
+  color: inherit;
+}
+
+.diffRow[data-diff-kind='note'] .diffText {
+  color: var(--git-ink-4);
+}
+
+/* ------------------------------------------------------------ commit box */
+
+.commitBox {
+  /* Never shrinks: the commit box must stay visible without scrolling, which is
+     the whole point of bounding the panel. */
+  flex: none;
+  border-top: 1px solid var(--git-hair);
+  padding: 8px 10px 10px;
+}
+
+/* The one input in the panel, so it is the one place a border is right — but a
+   hairline of border-l2 over a 3% wash of the panel's own surface, not a drawn
+   box: the field reads as a well, and focus is a border that goes to full-
+   contrast ink rather than a glow. */
+.commitInput {
+  width: 100%;
+  min-height: 48px;
+  max-height: 160px;
+  resize: vertical;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--dsw-alias-label-primary) 3%, transparent);
+  color: var(--git-ink);
+  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.commitInput::placeholder {
+  color: var(--git-ink-4);
+}
+
+.commitInput:focus {
+  outline: none;
+  border-color: var(--dsw-alias-brand-primary);
+}
+
+.commitActions {
+  display: flex;
+  align-items: center;
+  /* The commit button is the box's primary action and sits at the content's right
+     edge, where a dialog's confirming button belongs — not left-aligned under the
+     message it applies to. */
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+/* ------------------------------------------------------------------- diff */
+
+/* There is ONE diff renderer: .diff/.diffRow above, over the rows diff-parse
+   builds, used by the History tab's review and by the change list's preview
+   alike. A second, prefix-tint renderer of the raw patch used to live here for
+   the preview; it showed git's diff --git/index plumbing, had no line-number
+   gutters, and made the same file read like two different tools. */
+
+/* --------------------------------------------------------------- commits */
+
+.commitRow {
+  display: flex;
+  gap: 8px;
+  width: 100%;
+  padding: 5px 10px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.commitRow:hover {
+  background: var(--git-hover);
+}
+
+.commitRowActive {
+  background: var(--dsw-alias-interactive-bg-active);
+  box-shadow: inset 2px 0 0 var(--dsw-alias-brand-primary);
+}
+
+.commitOid {
+  flex-shrink: 0;
+  color: var(--git-ink-4);
+  font-family: var(--git-mono);
+  font-size: 11px;
+  padding-top: 1px;
+}
+
+.commitMain {
+  flex: 1;
+  min-width: 0;
+}
+
+.commitSubject {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.commitMeta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+  color: var(--git-ink-4);
+  font-size: 11px;
+  line-height: 16px;
+}
+
+/* A ref chip, in the shell's own toolbar-chip material: the translucent
+   button-tool-bar fill, no border, mono at 10px because a ref name is data. */
+.refBadge {
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--dsw-alias-button-tool-bar-fill);
+  color: var(--git-ink);
+  font-family: var(--git-mono);
+  font-size: 10px;
+  line-height: 16px;
+}
+
+.refBadgeCurrent {
+  background: var(--dsw-alias-brand-primary);
+  color: var(--dsw-alias-label-primary-foreground);
+}
+
+/* The preview head's own chip row: which side of the index is on show, and a
+   truncation note when the host capped the patch. */
+.detailMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  color: var(--git-ink-4);
+  font-size: 11px;
+}
+
+.statAdd {
+  color: var(--git-add-ink);
+}
+
+.statDel {
+  color: var(--git-del-ink);
+}
+
+.confirmBar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+  padding: 5px 8px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 10%, transparent);
+  color: var(--dsw-alias-state-error-primary);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.confirmText {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* ---------------------------------------------------------------- focus */
+
+/* One ring for everything that can be reached by keyboard, in the shell's own
+   focus colour. Last in the file on purpose: at equal specificity it has to win
+   over the hover fills and the borderless buttons above. The commit textarea is
+   not here — it is the one field, and it shows focus as a border that goes to
+   brand ink (see .commitInput:focus). */
+.button:focus-visible,
+.branchButton:focus-visible,
+.branchRow:focus-visible,
+.branchOpButton:focus-visible,
+.tab:focus-visible,
+.fileRow:focus-visible,
+.commitRow:focus-visible,
+.reviewOid:focus-visible {
+  outline: 1px solid var(--dsw-alias-state-business-primary);
+  outline-offset: 1px;
+}

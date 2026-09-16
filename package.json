@@ -1,0 +1,112 @@
+{
+  "name": "@fengbinmov/dsh-git-panel",
+  "description": "External dsh Web GUI plugin: a Git tab (changes, staging, commits, diffs, history, branches, remotes) registered as a Conversation View, packaged as a dsh profile bundle",
+  "version": "0.1.0",
+  "type": "module",
+  "packageManager": "pnpm@11.7.0",
+  "engines": {
+    "node": "^22.19.0 || >=24.0.0"
+  },
+  "scripts": {
+    "build": "tsc -b && tsdown",
+    "test": "vitest run",
+    "typecheck": "tsc -b --pretty false",
+    "prepublishOnly": "pnpm typecheck && pnpm test && pnpm build",
+    "prepare": "tsdown --config tsdown.prepare.config.ts"
+  },
+  "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
+
+
+  
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./client": {
+      "types": "./lib/types/client/index.d.ts",
+      "default": "./lib/client.js"
+    },
+    "./src/*": "./src/*",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "engines": {
+      "dsh": ">=0.1.5-rc.1"
+    },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-api-session-controller"
+      ],
+      "platform": "web"
+    }
+  },
+  "files": [
+    "lib/**/*.js",
+    "lib/**/*.js.map",
+    "lib/**/*.d.ts",
+    "lib/**/*.d.ts.map",
+    "src",
+    "cordis.patch.yml"
+  ],
+  "license": "MIT",
+  "author": "fengbinmov",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fengbinmov/dsh-git-panel.git"
+  },
+  "homepage": "https://github.com/fengbinmov/dsh-git-panel#readme",
+  "bugs": {
+    "url": "https://github.com/fengbinmov/dsh-git-panel/issues"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "dsh-bundle",
+    "deepseek-harness",
+    "git",
+    "git-panel",
+    "cordis",
+    "web-gui"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "peerDependencies": {
+    "react": "^18.2.0"
+  },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.2",
+    "@deepseek-ai/dsh-api-remotes": "^0.1.5-rc.1",
+    "@deepseek-ai/dsh-api-session-controller": "^0.1.5-rc.1",
+    "@deepseek-ai/dsh-client-connection": "^0.1.5-rc.1",
+    "@deepseek-ai/dsh-client-locale": "^0.1.5-rc.1",
+    "@deepseek-ai/dsh-client-store": "^0.1.5-rc.1",
+    "@deepseek-ai/dsh-client-ui-conversation": "^0.1.5-rc.1",
+    "@deepseek-ai/dsh-client-ui-renderer": "^0.1.5-rc.1",
+    "@deepseek-ai/dsh-client-ui-session": "^0.1.5-rc.1",
+    "@deepseek-ai/dsh-client-ui-slots": "^0.1.5-rc.1",
+    "@deepseek-ai/dsh-host-webserver": "^0.1.5-rc.1",
+    "@deepseek-ai/dsh-subprocess": "^0.1.5-rc.1",
+    "@deepseek-ai/dsh-workspace": "^0.1.5-rc.1",
+    "@testing-library/dom": "^10.4.1",
+    "@testing-library/react": "^16.3.3",
+    "@types/node": "^22.20.0",
+    "@types/react": "~18.3.1",
+    "@types/react-dom": "^18.3.5",
+    "jsdom": "^29.1.1",
+    "lightningcss": "^1.33.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tsdown": "^0.22.2",
+    "typescript": "^6.0.3",
+    "vite-tsconfig-paths": "^6.1.1",
+    "vitest": "^4.1.8"
+  }
+}

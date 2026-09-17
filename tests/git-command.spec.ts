@@ -8,7 +8,8 @@ import { describe, expect, it } from 'vitest'
 import {
   addArgv, classifySwitchFailure, cleanArgv, commitArgv, diffStatPatchArgv, discardRestoreArgv,
   extractBlockedPaths,
-  isSafeRepoPath, rmCachedArgv, showPathPatchArgv, statusFilesArgv, statusV2Argv, switchArgv, unstageArgv,
+  isSafeRepoPath, rmCachedArgv, showPatchArgv, showPathPatchArgv, showStatArgv, statusFilesArgv, statusV2Argv,
+  switchArgv, unstageArgv,
   untrackedDiffArgv, validateBranchName,
 } from '../src/core/git-command.ts'
 
@@ -57,14 +58,26 @@ describe('argv builders', () => {
     expect(statusFilesArgv()).toContain('-z')
   })
 
+  it('diffs a commit against its first parent, which is what makes a merge readable', () => {
+    // Without --first-parent git answers a MERGE with its combined diff, which is
+    // the EMPTY STRING for an ordinary "Merge branch 'x'". The file list still
+    // filled in from the numstat spawn, so the panel listed files that could not
+    // be previewed at all — the complaint this flag fixes.
+    expect(showPatchArgv('abc1234')).toContain('--first-parent')
+    expect(showStatArgv('abc1234')).toContain('--first-parent')
+    expect(showPathPatchArgv('abc1234', 'src/a.ts')).toContain('--first-parent')
+  })
+
   it('asks for one commit file behind the path separator', () => {
     // The per-file route exists because the commit-wide patch is capped: this call
     // is not, so a file reads whole however big the commit around it is. The `--`
     // is what keeps a leading-dash path from being read as an option.
     expect(showPathPatchArgv('abc1234', 'src/a.ts')).toEqual([
       '-c', 'core.quotePath=false',
-      'show', '--patch', '--no-color', '--no-ext-diff', '--format=', 'abc1234', '--', 'src/a.ts',
+      'show', '--patch', '--first-parent', '--no-color', '--no-ext-diff', '--format=', 'abc1234', '--', 'src/a.ts',
     ])
+    const dashed = showPathPatchArgv('abc1234', '-weird.txt')
+    expect(dashed.indexOf('--')).toBe(dashed.indexOf('-weird.txt') - 1)
   })
 
   it('uses the null device form that needs no index mutation for an untracked diff', () => {

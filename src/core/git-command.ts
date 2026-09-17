@@ -204,12 +204,26 @@ export const showMetaArgv = (oid: string): string[] => [
 
 /** `git show --numstat -z --format=` — one commit's changed-file statistics (NUL-separated, so paths with tabs or newlines survive). */
 export const showStatArgv = (oid: string): string[] => [...UNQUOTED,
-  'show', '--numstat', '-z', '--format=', '--no-renames', oid,
+  'show', '--numstat', '-z', '--format=', '--no-renames', '--first-parent', oid,
 ]
 
-/** `git show --patch` — one commit's unified diff. */
+/**
+ * `git show --patch --first-parent` — one commit's unified diff.
+ *
+ * `--first-parent` is what makes a MERGE commit readable at all. Without it git
+ * answers a merge with its combined diff (`--cc`), which reports only the files
+ * whose conflicts were resolved by hand — for an ordinary "Merge branch 'x'" that
+ * is the EMPTY STRING. The panel then had a populated file list (the per-file
+ * `--numstat` is not empty) and a zero-byte patch, so every file fell through to
+ * "the diff was too large".
+ *
+ * With it, a merge is diffed against its FIRST parent, which is what the merge
+ * brought into the branch — the same choice GitHub and GitLab make. A commit with
+ * one parent is unaffected: the same argv without the flag produces byte-identical
+ * output (measured), so one code path serves both.
+ */
 export const showPatchArgv = (oid: string): string[] => [...UNQUOTED,
-  'show', '--patch', '--no-color', '--no-ext-diff', '--format=', oid,
+  'show', '--patch', '--first-parent', '--no-color', '--no-ext-diff', '--format=', oid,
 ]
 
 /**
@@ -220,9 +234,14 @@ export const showPatchArgv = (oid: string): string[] => [...UNQUOTED,
  * path is not subject to that cap, so a file reads whole however large the commit
  * around it is. The `--` separator keeps a path that begins with a dash from being
  * read as an option.
+ *
+ * `--first-parent` is here for the same reason as in {@link showPatchArgv}: without
+ * it a MERGE answers this route with nothing at all (measured: 0 bytes against 751
+ * with it), so the files the list showed stayed unpreviewable — the cap was never
+ * the whole story.
  */
 export const showPathPatchArgv = (oid: string, path: string): string[] => [...UNQUOTED,
-  'show', '--patch', '--no-color', '--no-ext-diff', '--format=', oid, '--', path,
+  'show', '--patch', '--first-parent', '--no-color', '--no-ext-diff', '--format=', oid, '--', path,
 ]
 
 /** `git remote -v` — configured remotes with their fetch/push URLs. */

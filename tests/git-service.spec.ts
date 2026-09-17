@@ -522,6 +522,44 @@ describe('GitService', () => {
       expect(single?.patch).not.toContain('bulk/f00.txt')
     })
 
+    it('reads a MERGE commit against its first parent, so its files preview', async () => {
+      // The reported case: the History tab listed a merge's changed files and not
+      // one of them could be previewed. `git show` answers a merge with its combined
+      // diff, which is the empty string for an ordinary "Merge branch 'x'" — so the
+      // patch was 0 bytes while the numstat spawn (a different command) still
+      // reported files. Diffing against the first parent is what the merge brought
+      // into the branch, and is what GitHub shows.
+      await git(repo, 'checkout', '-b', 'feature')
+      await writeFile(join(repo, 'feature.txt'), 'from feature\n')
+      await git(repo, 'add', '.')
+      await git(repo, 'commit', '-m', 'feature work')
+      await git(repo, 'checkout', 'main')
+      await writeFile(join(repo, 'main.txt'), 'from main\n')
+      await git(repo, 'add', '.')
+      await git(repo, 'commit', '-m', 'main work')
+      expect((await service.merge(repo, 'feature')).ok).toBe(true)
+
+      const head = (await service.history(repo, 1, 0))?.commits[0]
+      // The fixture has to BE a merge, or the test proves nothing.
+      expect(head?.parents).toHaveLength(2)
+      const oid = head?.oid ?? ''
+
+      const detail = await service.commitDetail(repo, oid)
+      expect(detail?.truncated).toBe(false)
+      // The merge's own contribution: what the second parent added on top of the
+      // first, and nothing that was already on the first parent's side.
+      expect(detail?.files.map(file => file.path)).toEqual(['feature.txt'])
+      expect(detail?.patch).toContain('b/feature.txt')
+      expect(detail?.patch).toContain('+from feature')
+      expect(detail?.patch).not.toContain('main.txt')
+
+      // And every file the list shows can actually be opened.
+      for (const file of detail?.files ?? []) {
+        const one = await service.commitDiff(repo, oid, file.path)
+        expect(one?.patch).toContain('+from feature')
+      }
+    })
+
     it('validates both the object id and the path before either reaches argv', async () => {
       const oid = (await service.history(repo, 1, 0))?.commits[0]?.oid ?? ''
       // A path is gated exactly as it is on the change list's per-file route.

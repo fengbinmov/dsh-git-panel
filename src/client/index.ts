@@ -26,8 +26,9 @@ import type {
   BranchesView, CommitDetail, CommitDiff, CommitOutcome, DiffView, GitError, HistoryView, MutationResult,
   RemoteView, StatusFilesView, SwitchResult,
 } from '../core/types.ts'
-import { GitApi, subscribeChanges } from './api.ts'
+import { GitApi, subscribeChanges, type ApiResult } from './api.ts'
 import { GitView } from './git/GitView.tsx'
+import { withPanelBoundary } from './git/PanelBoundary.tsx'
 import { isPanelMounted, rememberStatus } from './git/panel-cache.ts'
 import { en, zh, type GitPanelKey } from './locales.ts'
 
@@ -156,115 +157,70 @@ export function apply(ctx: ClientContext): void {
 
     /** The injected face the view receives. */
     const injected = (): GitPanelInjected => {
-      /** Map a `{ summary }` envelope onto the injected MutationResult shape. */
-      const mutation = (result: { ok: true; value: { summary: string } } | { ok: false; error: GitError }): MutationResult =>
-        result.ok ? { ok: true, summary: result.value.summary } : result
+      /**
+       * Run one READ verb against the session's workspace.
+       *
+       * Every verb here opened with the same two steps — resolve the session's cwd,
+       * answer with nothing when it has none — and closed with the same unwrapping.
+       * Written out twenty times, that boilerplate buried the one line that differed.
+       */
+      const read = async <T>(
+        sessionId: SessionId | undefined,
+        verb: (path: string) => Promise<ApiResult<T>>,
+      ): Promise<T | null> => {
+        const resolved = pathOf(sessionId)
+        if (!resolved.ok) return null
+        const result = await verb(resolved.path)
+        return result.ok ? result.value : null
+      }
+
+      /**
+       * Run one MUTATION verb.
+       *
+       * Same gating as {@link read}, except that a failed workspace keeps its own
+       * rejection code rather than reading as "no answer", and the envelope's summary
+       * becomes the `{ ok, summary }` the view reports.
+       */
+      const mutate = async (
+        sessionId: SessionId | undefined,
+        verb: (path: string) => Promise<ApiResult<{ summary: string }>>,
+      ): Promise<MutationResult> => {
+        const resolved = pathOf(sessionId)
+        if (!resolved.ok) return { ok: false, error: resolved.error }
+        const result = await verb(resolved.path)
+        return result.ok ? { ok: true, summary: result.value.summary } : result
+      }
 
       return {
-        files: async (sessionId) => {
-          const resolved = pathOf(sessionId)
-          if (!resolved.ok) return null
-          const result = await git.statusFiles(resolved.path)
-          return result.ok ? result.value : null
-        },
-        branches: async (sessionId) => {
-          const resolved = pathOf(sessionId)
-          if (!resolved.ok) return null
-          const result = await git.branches(resolved.path)
-          return result.ok ? result.value : null
-        },
+        files: (sessionId) => read(sessionId, path => git.statusFiles(path)),
+        branches: (sessionId) => read(sessionId, path => git.branches(path)),
         switchBranch: async (sessionId, branch) => {
           const resolved = pathOf(sessionId)
           if (!resolved.ok) return { ok: false, error: resolved.error }
           const result = await git.switchBranch(resolved.path, branch)
           return result.ok ? { ok: true, branch: result.value.branch } : result
         },
-        diff: async (sessionId, file, staged) => {
-          const resolved = pathOf(sessionId)
-          if (!resolved.ok) return null
-          const result = await git.diff(resolved.path, file, staged)
-          return result.ok ? result.value : null
-        },
-        stage: async (sessionId, paths) => {
-          const resolved = pathOf(sessionId)
-          if (!resolved.ok) return { ok: false, error: resolved.error }
-          return mutation(await git.stage(resolved.path, paths))
-        },
-        unstage: async (sessionId, paths) => {
-          const resolved = pathOf(sessionId)
-          if (!resolved.ok) return { ok: false, error: resolved.error }
-          return mutation(await git.unstage(resolved.path, paths))
-        },
-        discard: async (sessionId, paths) => {
-          const resolved = pathOf(sessionId)
-          if (!resolved.ok) return { ok: false, error: resolved.error }
-          return mutation(await git.discard(resolved.path, paths))
-        },
-        applySelection: async (sessionId, file, direction, fragment) => {
-          const resolved = pathOf(sessionId)
-          if (!resolved.ok) return { ok: false, error: resolved.error }
-          return mutation(await git.applySelection(resolved.path, file, direction, fragment))
-        },
+        diff: (sessionId, file, staged) => read(sessionId, path => git.diff(path, file, staged)),
+        stage: (sessionId, paths) => mutate(sessionId, path => git.stage(path, paths)),
+        unstage: (sessionId, paths) => mutate(sessionId, path => git.unstage(path, paths)),
+        discard: (sessionId, paths) => mutate(sessionId, path => git.discard(path, paths)),
+        applySelection: (sessionId, file, direction, fragment) => mutate(sessionId, path => git.applySelection(path, file, direction, fragment)),
         commit: async (sessionId, message, amend) => {
           const resolved = pathOf(sessionId)
           if (!resolved.ok) return { ok: false, error: resolved.error }
           const result = await git.commit(resolved.path, message, amend)
           return result.ok ? { ok: true, oid: result.value.oid, subject: result.value.subject } : result
         },
-        history: async (sessionId, limit, skip) => {
-          const resolved = pathOf(sessionId)
-          if (!resolved.ok) return null
-          const result = await git.history(resolved.path, limit, skip)
-          return result.ok ? result.value : null
-        },
-        commitDetail: async (sessionId, oid) => {
-          const resolved = pathOf(sessionId)
-          if (!resolved.ok) return null
-          const result = await git.commitDetail(resolved.path, oid)
-          return result.ok ? result.value : null
-        },
-        commitDiff: async (sessionId, oid, file) => {
-          const resolved = pathOf(sessionId)
-          if (!resolved.ok) return null
-          const result = await git.commitDiff(resolved.path, oid, file)
-          return result.ok ? result.value : null
-        },
-        remote: async (sessionId) => {
-          const resolved = pathOf(sessionId)
-          if (!resolved.ok) return null
-          const result = await git.remote(resolved.path)
-          return result.ok ? result.value : null
-        },
-        fetch: async (sessionId) => {
-          const resolved = pathOf(sessionId)
-          if (!resolved.ok) return { ok: false, error: resolved.error }
-          return mutation(await git.fetch(resolved.path))
-        },
-        pull: async (sessionId) => {
-          const resolved = pathOf(sessionId)
-          if (!resolved.ok) return { ok: false, error: resolved.error }
-          return mutation(await git.pull(resolved.path))
-        },
-        push: async (sessionId) => {
-          const resolved = pathOf(sessionId)
-          if (!resolved.ok) return { ok: false, error: resolved.error }
-          return mutation(await git.push(resolved.path))
-        },
-        merge: async (sessionId, branch) => {
-          const resolved = pathOf(sessionId)
-          if (!resolved.ok) return { ok: false, error: resolved.error }
-          return mutation(await git.merge(resolved.path, branch))
-        },
-        rebase: async (sessionId, branch) => {
-          const resolved = pathOf(sessionId)
-          if (!resolved.ok) return { ok: false, error: resolved.error }
-          return mutation(await git.rebase(resolved.path, branch))
-        },
-        abortOperation: async (sessionId) => {
-          const resolved = pathOf(sessionId)
-          if (!resolved.ok) return { ok: false, error: resolved.error }
-          return mutation(await git.abortOperation(resolved.path))
-        },
+        history: (sessionId, limit, skip) => read(sessionId, path => git.history(path, limit, skip)),
+        commitDetail: (sessionId, oid) => read(sessionId, path => git.commitDetail(path, oid)),
+        commitDiff: (sessionId, oid, file) => read(sessionId, path => git.commitDiff(path, oid, file)),
+        remote: (sessionId) => read(sessionId, path => git.remote(path)),
+        fetch: (sessionId) => mutate(sessionId, path => git.fetch(path)),
+        pull: (sessionId) => mutate(sessionId, path => git.pull(path)),
+        push: (sessionId) => mutate(sessionId, path => git.push(path)),
+        merge: (sessionId, branch) => mutate(sessionId, path => git.merge(path, branch)),
+        rebase: (sessionId, branch) => mutate(sessionId, path => git.rebase(path, branch)),
+        abortOperation: (sessionId) => mutate(sessionId, path => git.abortOperation(path)),
         subscribeChanges: (sessionId, onChange) => {
           const resolved = pathOf(sessionId)
           if (!resolved.ok) return () => {}
@@ -279,6 +235,12 @@ export function apply(ctx: ClientContext): void {
     // the strip from this slot's entries, so registering is enough. `order: 20`
     // places it after Chat (0) and Trajectory (10), and the distinct entry id
     // keeps it clear of any other plugin's view.
+    //
+    // The registered component is the view WRAPPED in an error boundary. The shell
+    // mounts this view into its own tree and has no boundary of its own around it,
+    // so a throw anywhere below — a render, or an effect calling something the host
+    // did not provide — unmounted the tab and left a blank column. The boundary
+    // keeps the tab in place and hands the reader a sentence instead.
     scope.slots.inject('conversation.view', () => {
       try {
         return scope.slots.register(
@@ -290,7 +252,7 @@ export function apply(ctx: ClientContext): void {
             label: () => viewLabel(),
             inject: injected,
           },
-          GitView)
+          withPanelBoundary(GitView))
       } catch {
         return () => {}
       }

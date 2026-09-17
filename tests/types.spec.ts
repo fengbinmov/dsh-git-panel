@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
-  isBinaryPatch, isStatusFilesView, operationNameFromMarkers, parseAheadBehind, parseBranches,
+  isBinaryPatch, isCommitDiff, isStatusFilesView, operationNameFromMarkers, parseAheadBehind, parseBranches,
   parseHistory, parseNumstat, parseRemotes, parseShowMeta, parseStatPatch, parseStatusV2,
   predictCommitted, predictDiscarded, predictLineSelection, predictStaged, withLineStats,
   type FileChange, type StatusFilesView,
@@ -14,6 +14,21 @@ import {
 
 const NUL = '\u0000'
 const ZERO = '0'.repeat(40)
+
+describe('isCommitDiff', () => {
+  it('accepts one file\'s patch and rejects a half-built view', () => {
+    // The route boundary runs this before the answer reaches the browser, so a
+    // malformed one is refused rather than rendered as a file with no rows.
+    expect(isCommitDiff({ path: 'a.txt', binary: false, truncated: false, patch: 'diff --git a/a.txt b/a.txt' })).toBe(true)
+    // The per-file view carries no `staged` field: a commit file is not a side of
+    // the index, and a payload claiming to be one side is not this shape.
+    expect(isCommitDiff({ path: 'a.txt', staged: false, binary: false, truncated: false, patch: '' })).toBe(true)
+    expect(isCommitDiff({ path: 'a.txt', binary: false, truncated: false })).toBe(false)
+    expect(isCommitDiff({ path: 'a.txt', binary: false, truncated: 'no', patch: '' })).toBe(false)
+    expect(isCommitDiff(null)).toBe(false)
+    expect(isCommitDiff('a.txt')).toBe(false)
+  })
+})
 
 /**
  * One porcelain v2 record for an ordinary (non-rename) path. The record shape is

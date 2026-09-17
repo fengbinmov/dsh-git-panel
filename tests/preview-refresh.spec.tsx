@@ -257,6 +257,36 @@ function detailOf(): CommitDetail {
   }
 }
 
+/**
+ * A commit whose patch the host CAPPED: the shape a commit touching more files
+ * than the cap allows comes back in. Every file still carries its numstat row —
+ * that is a different spawn — while the patch stops inside the first file, so the
+ * sections and the file list disagree, which is exactly the state that produced
+ * "the diff was too large" for every file.
+ */
+function cappedDetail(): CommitDetail {
+  const full = twoFilePatch()
+  return { ...detailOf(), patch: full.slice(0, full.indexOf('diff --git a/b.txt')), truncated: true }
+}
+
+/** One file's section out of the two-file patch, the shape `git show <oid> -- <path>` answers in. */
+function sectionFor(file: string): string {
+  const full = twoFilePatch()
+  const at = full.indexOf(`diff --git a/${file} `)
+  if (at < 0) return ''
+  const rest = full.slice(at)
+  const nextAt = rest.indexOf('diff --git a/', 10)
+  return nextAt < 0 ? rest : rest.slice(0, nextAt)
+}
+
+/** Open the History tab and pick the one commit it lists. */
+async function openCommit(container: HTMLElement): Promise<void> {
+  fireEvent.click(container.querySelector('[data-gitgraph-tab="history"]') as HTMLElement)
+  const row = '[data-gitgraph-commit-oid="' + REVIEW_COMMIT.oid + '"]'
+  await waitFor(() => { expect(container.querySelector(row)).not.toBeNull() })
+  fireEvent.click(container.querySelector(row) as HTMLElement)
+}
+
 describe('the commit review under a background refresh', () => {
   it('keeps the picked file and the mounted diff while the same commit re-fetches', async () => {
     const { container, refresh } = mountView(
@@ -289,6 +319,113 @@ describe('the commit review under a background refresh', () => {
       expect(container.querySelector('[data-gitgraph-review-file="b.txt"]')?.getAttribute('aria-pressed')).toBe('true')
     })
     expect(container.querySelector('[data-gitgraph-part="review-diff"] [data-diff-index="2"]')).toBe(diffRow)
+  })
+})
+
+/** The verbs that open one commit, with whatever the case under test adds. */
+function reviewVerbs(detail: CommitDetail, extra: Partial<GitPanelInjected> = {}): Partial<GitPanelInjected> {
+  return {
+    history: async () => ({ root: '/repo', branch: 'main', commits: [REVIEW_COMMIT], hasMore: false }),
+    commitDetail: async () => detail,
+    ...extra,
+  }
+}
+
+/**
+ * A capped commit review has to survive a shell that cannot fetch single files.
+ *
+ * This is the regression that took the whole History tab down once: the per-file
+ * verb was passed down as a wrapper that closed over a missing `props.commitDiff`,
+ * so the review's guard saw a function, called it, and threw inside an effect —
+ * which React answers by unmounting the tree. The verb is optional now, and the
+ * guard sits on the verb itself; these tests pin both halves.
+ */
+describe('the commit review of a capped commit', () => {
+  it('keeps the whole review standing when the shell cannot fetch a single file', async () => {
+    const { container } = mountView(
+      () => statusOf([tracked('src/a.ts')], { worktree: TRACKED_PATCH, staged: '' }),
+      path => diffOf(path, TRACKED_PATCH),
+      reviewVerbs(cappedDetail(), { commitDiff: undefined }),
+    )
+    await openCommit(container)
+
+    // The bar, the file list and both rows are still there: an absent verb changes
+    // what the diff pane says, never whether the review renders at all.
+    await waitFor(() => { expect(container.querySelector('[data-gitgraph-review-oid]')).not.toBeNull() })
+    expect(container.querySelector('[data-gitgraph-review-file="a.txt"]')).not.toBeNull()
+    expect(container.querySelector('[data-gitgraph-review-file="b.txt"]')).not.toBeNull()
+    expect(container.textContent).toContain('git.review.count')
+
+    const pane = container.querySelector('[data-gitgraph-part="review-diff"]')
+    expect(pane?.querySelector('[data-diff-kind]')).toBeNull()
+    expect(pane?.textContent).toContain('git.review.truncated')
+  })
+
+  it('fetches the file the capped patch left out, one file at a time', async () => {
+    const asked: string[] = []
+    const { container } = mountView(
+      () => statusOf([tracked('src/a.ts')], { worktree: TRACKED_PATCH, staged: '' }),
+      path => diffOf(path, TRACKED_PATCH),
+      reviewVerbs(cappedDetail(), {
+        commitDiff: async (_session, oid, file) => {
+          asked.push(`${oid}|${file}`)
+          return { path: file, binary: false, truncated: false, patch: sectionFor(file) }
+        },
+      }),
+    )
+    await openCommit(container)
+
+    // The first file is picked for the reader, so its patch is what gets asked for.
+    await waitFor(() => { expect(asked).toContain(`${REVIEW_COMMIT.oid}|a.txt`) })
+    await waitFor(() => {
+      expect(container.querySelector('[data-gitgraph-part="review-diff"] [data-diff-kind]')).not.toBeNull()
+    })
+
+    // Picking the second file asks for THAT one — the point of the route.
+    fireEvent.click(container.querySelector('[data-gitgraph-review-file="b.txt"]') as HTMLElement)
+    await waitFor(() => { expect(asked).toContain(`${REVIEW_COMMIT.oid}|b.txt`) })
+    await waitFor(() => {
+      expect(container.querySelector('[data-gitgraph-part="review-diff"] [data-diff-kind]')).not.toBeNull()
+    })
+    // Two fetches and no more: a resolved file is not asked for again.
+    expect(asked).toHaveLength(2)
+  })
+
+  it('falls back to the note, without throwing, when the fetch fails', async () => {
+    const { container } = mountView(
+      () => statusOf([tracked('src/a.ts')], { worktree: TRACKED_PATCH, staged: '' }),
+      path => diffOf(path, TRACKED_PATCH),
+      reviewVerbs(cappedDetail(), {
+        commitDiff: async () => { throw new Error('route unavailable') },
+      }),
+    )
+    await openCommit(container)
+
+    await waitFor(() => {
+      expect(container.querySelector('[data-gitgraph-part="review-diff"]')?.textContent).toContain('git.review.truncated')
+    })
+    // The review is intact around the pane, and the failure was not retried forever.
+    expect(container.querySelector('[data-gitgraph-review-file="a.txt"]')).not.toBeNull()
+    expect(container.querySelector('[data-gitgraph-review-file="b.txt"]')).not.toBeNull()
+  })
+
+  it('survives a verb that throws synchronously instead of rejecting', async () => {
+    // Not a hypothetical shape: the promise chain alone does not cover it, and a
+    // throw inside an effect is what unmounts the whole view.
+    const { container } = mountView(
+      () => statusOf([tracked('src/a.ts')], { worktree: TRACKED_PATCH, staged: '' }),
+      path => diffOf(path, TRACKED_PATCH),
+      reviewVerbs(cappedDetail(), {
+        commitDiff: () => { throw new Error('thrown, not rejected') },
+      }),
+    )
+    await openCommit(container)
+
+    await waitFor(() => {
+      expect(container.querySelector('[data-gitgraph-part="review-diff"]')?.textContent).toContain('git.review.truncated')
+    })
+    expect(container.querySelector('[data-gitgraph-review-oid]')).not.toBeNull()
+    expect(container.querySelector('[data-gitgraph-review-file="b.txt"]')).not.toBeNull()
   })
 })
 

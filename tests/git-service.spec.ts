@@ -456,6 +456,85 @@ describe('GitService', () => {
       expect(await service.commitDetail(repo, 'zzzz')).toBeNull()
       expect(await service.commitDetail(repo, '')).toBeNull()
     })
+
+    it('reads one commit file on its own, which is what the cap cannot cut', async () => {
+      // The per-file route exists because the commit-wide patch is capped. Both
+      // files of this commit are touched, and each reads whole on its own.
+      await writeFile(join(repo, 'a.txt'), 'two\n')
+      await writeFile(join(repo, 'second.txt'), 's\n')
+      await service.stage(repo, ['a.txt', 'second.txt'])
+      expect((await service.commit(repo, 'both')).ok).toBe(true)
+      const oid = (await service.history(repo, 1, 0))?.commits[0]?.oid ?? ''
+
+      const first = await service.commitDiff(repo, oid, 'a.txt')
+      expect(first?.path).toBe('a.txt')
+      expect(first?.binary).toBe(false)
+      expect(first?.truncated).toBe(false)
+      expect(first?.patch).toContain('-one')
+      expect(first?.patch).toContain('+two')
+      // One path only: the other file's section is not in this answer.
+      expect(first?.patch).not.toContain('second.txt')
+
+      const second = await service.commitDiff(repo, oid, 'second.txt')
+      expect(second?.patch).toContain('+s')
+      expect(second?.patch).not.toContain('a.txt')
+
+      // A binary file answers with its marker rather than hunks.
+      await writeFile(join(repo, 'blob.bin'), Buffer.from([0, 1, 2, 0, 255]))
+      await service.stage(repo, ['blob.bin'])
+      expect((await service.commit(repo, 'binary')).ok).toBe(true)
+      const binaryOid = (await service.history(repo, 1, 0))?.commits[0]?.oid ?? ''
+      const binary = await service.commitDiff(repo, binaryOid, 'blob.bin')
+      expect(binary?.binary).toBe(true)
+      expect(binary?.patch).not.toContain('@@')
+    })
+
+    it('answers per file for a commit whose whole patch was capped', async () => {
+      // The reported case: a commit touching enough files that the commit-wide
+      // patch hits the host's cap. Everything past the cut has no section, so the
+      // review used to say "the diff was too large" for every one of those files.
+      // The per-file route is outside that cap, which is the whole fix.
+      // Zero-padded, so git's path sort agrees with the reading order and "the
+      // last file" is the one the cap actually cuts.
+      const names = Array.from({ length: 12 }, (_, index) => `bulk/f${String(index).padStart(2, '0')}.txt`)
+      await mkdir(join(repo, 'bulk'), { recursive: true })
+      const body = Array.from({ length: 900 }, (_, line) => `line ${line} ${'x'.repeat(40)}`).join('\n')
+      for (const name of names) await writeFile(join(repo, name), `${body}\n`)
+      await service.stage(repo, names)
+      expect((await service.commit(repo, 'bulk')).ok).toBe(true)
+      const oid = (await service.history(repo, 1, 0))?.commits[0]?.oid ?? ''
+
+      const detail = await service.commitDetail(repo, oid)
+      expect(detail?.truncated).toBe(true)
+      // Every file is still LISTED — that is a separate numstat spawn — while the
+      // patch stops short of them.
+      expect(detail?.files).toHaveLength(names.length)
+      const last = names[names.length - 1] as string
+      expect(detail?.patch).not.toContain(`b/${last}`)
+
+      // The file the cap left out reads whole on its own, including its last line.
+      const single = await service.commitDiff(repo, oid, last)
+      expect(single?.path).toBe(last)
+      expect(single?.truncated).toBe(false)
+      expect(single?.patch).toContain(`b/${last}`)
+      expect(single?.patch).toContain('line 899')
+      // And it is that file only.
+      expect(single?.patch).not.toContain('bulk/f00.txt')
+    })
+
+    it('validates both the object id and the path before either reaches argv', async () => {
+      const oid = (await service.history(repo, 1, 0))?.commits[0]?.oid ?? ''
+      // A path is gated exactly as it is on the change list's per-file route.
+      expect(await service.commitDiff(repo, oid, '../outside.txt')).toBeNull()
+      expect(await service.commitDiff(repo, oid, 'C:\\Windows\\system.ini')).toBeNull()
+      expect(await service.commitDiff(repo, oid, '')).toBeNull()
+      // So is the id, so a crafted one can never parse as a git option.
+      expect(await service.commitDiff(repo, '--upload-pack=touch /tmp/x', 'a.txt')).toBeNull()
+      expect(await service.commitDiff(repo, 'zzzz', 'a.txt')).toBeNull()
+      // A path this commit never touched has nothing to answer with — an empty
+      // patch, not a hole the review would have to guess at.
+      expect((await service.commitDiff(repo, oid, 'never-existed.txt'))?.patch.trim()).toBe('')
+    })
   })
 
   describe('remotes', () => {

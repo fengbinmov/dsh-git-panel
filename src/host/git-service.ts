@@ -27,7 +27,7 @@ import {
   forEachRefArgv,
   headBranchArgv, headShortArgv, historyArgv, isSafeRepoPath, mergeAbortArgv,
   mergeArgv, OPERATION_MARKERS, pullArgv, pushArgv, rebaseAbortArgv,
-  rebaseArgv, remoteListArgv, rmCachedArgv, showMetaArgv, showPatchArgv, showStatArgv,
+  rebaseArgv, remoteListArgv, rmCachedArgv, showMetaArgv, showPatchArgv, showPathPatchArgv, showStatArgv,
   statusFilesArgv, statusV2Argv, switchArgv, topLevelArgv,
   unstageArgv, untrackedDiffArgv, untrackedProbeArgv, upstreamArgv, validateBranchName,
   verifyHeadArgv, verifyRefArgv,
@@ -36,7 +36,7 @@ import {
   isBinaryPatch, operationNameFromMarkers, parseAheadBehind, parseBranches, parseHistory,
   parseNumstat, parseRemotes, parseShowMeta, parseStatPatch, parseStatusV2, selectionFragmentError,
   withLineStats,
-  type BranchesView, type CommitDetail, type CommitOutcome, type DiffView, type GitError,
+  type BranchesView, type CommitDetail, type CommitDiff, type CommitOutcome, type DiffView, type GitError,
   type HistoryView, type MutationResult, type RemoteRow, type RemoteView, type RepoProbe,
   type StatusFilesView, type SwitchResult,
 } from '../core/types.ts'
@@ -588,6 +588,37 @@ export class GitService {
       files: parseNumstat(statResult.stdout),
       patch: truncated ? patch.slice(0, PATCH_CAP_CHARS) : patch,
       truncated,
+    }
+  }
+
+  /**
+   * ONE file's patch out of a commit.
+   *
+   * The commit-wide patch is capped, so a commit touching many files hands the
+   * browser a patch whose tail is missing: those files have no section, and the
+   * review used to say "the diff was too large" for every one of them. Asking git
+   * for this one path is outside that cap, so the file reads whole.
+   *
+   * The oid and the path are both validated before either reaches argv: the oid as
+   * a hex object id (so it can never parse as an option) and the path as a
+   * repo-relative one (see `isSafeRepoPath`). The path is additionally kept behind
+   * `--` by the argv builder.
+   */
+  async commitDiff(path: string, oid: string, file: string, signal?: AbortSignal): Promise<CommitDiff | null> {
+    if (!/^[0-9a-fA-F]{4,64}$/.test(oid) || !isSafeRepoPath(file)) return null
+    const gated = await this.gate(path)
+    if (!gated.ok) return null
+    const root = await this.repoRoot(gated.canonical, signal)
+    if (root === null) return null
+    const result = await this.runner.run(showPathPatchArgv(oid, file), root, signal)
+    if (result.exitCode !== 0) return null
+    const patch = result.stdout
+    const truncated = patch.length > PATCH_CAP_CHARS
+    return {
+      path: file,
+      binary: isBinaryPatch(patch),
+      truncated,
+      patch: truncated ? patch.slice(0, PATCH_CAP_CHARS) : patch,
     }
   }
 

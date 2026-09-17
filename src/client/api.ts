@@ -7,7 +7,7 @@
 
 import { subscribeSharedEvents } from './sse-leader.ts'
 import type {
-  BranchesView, CommitDetail, DiffView, GitError, HistoryView, RemoteView, StatusFilesView,
+  BranchesView, CommitDetail, CommitDiff, DiffView, GitError, HistoryView, RemoteView, StatusFilesView,
 } from '../core/types.ts'
 
 /** One /gitpanel envelope response. */
@@ -107,6 +107,11 @@ export class GitApi {
   /** One commit's metadata, file statistics, and patch. */
   commitDetail(path: string, oid: string): Promise<ApiResult<CommitDetail | null>> {
     return post('/gitpanel/commit-detail', { path, oid })
+  }
+
+  /** One file's patch out of a commit. */
+  commitDiff(path: string, oid: string, file: string): Promise<ApiResult<CommitDiff | null>> {
+    return post('/gitpanel/commit-diff', { path, oid, file })
   }
 
   /** Branch, upstream, ahead/behind, and configured remotes. */

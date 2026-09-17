@@ -17,7 +17,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { Context } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-host-webserver'
 import {
-  isBranchesView, isCommitDetail, isDiffView, isGitError, isHistoryView, isRemoteView,
+  isBranchesView, isCommitDetail, isCommitDiff, isDiffView, isGitError, isHistoryView, isRemoteView,
   isStatusFilesView,
   type GitError,
 } from '../core/types.ts'
@@ -347,6 +347,20 @@ export function registerGitPanelRoutes(ctx: Context, service: GitService): () =>
           return
         }
         okView(res, await service.commitDetail(path, oid), isCommitDetail)
+        return
+      }
+      case '/gitpanel/commit-diff': {
+        // One file out of a commit, for a commit patch the cap cut short: the
+        // browser asks again per file rather than showing nothing for the files
+        // that fell past the cut.
+        const record = recordOf(payload)
+        const oid = record.oid
+        const file = record.file
+        if (typeof oid !== 'string' || oid === '' || typeof file !== 'string' || file === '') {
+          writeJson(res, 200, FAIL(BAD_REQUEST))
+          return
+        }
+        okView(res, await service.commitDiff(path, oid, file), isCommitDiff)
         return
       }
       case '/gitpanel/remote':

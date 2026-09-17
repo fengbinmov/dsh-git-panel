@@ -23,7 +23,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type {} from '@deepseek-ai/dsh-client-ui-session/client'
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
 import type {
-  BranchesView, CommitDetail, CommitOutcome, DiffView, GitError, HistoryView, MutationResult,
+  BranchesView, CommitDetail, CommitDiff, CommitOutcome, DiffView, GitError, HistoryView, MutationResult,
   RemoteView, StatusFilesView, SwitchResult,
 } from '../core/types.ts'
 import { GitApi, subscribeChanges } from './api.ts'
@@ -79,6 +79,15 @@ export interface GitPanelInjected {
   history: (sessionId: SessionId | undefined, limit: number, skip: number) => Promise<HistoryView | null>
   /** One commit's metadata, changed-file statistics, and patch. */
   commitDetail: (sessionId: SessionId | undefined, oid: string) => Promise<CommitDetail | null>
+  /**
+   * One file's patch out of a commit, for the files a capped commit patch left out.
+   *
+   * OPTIONAL on purpose: a view must treat a missing callback as "this build cannot
+   * fetch a single file" and keep rendering the commit it has, rather than assume
+   * the verb is there. That keeps a half-updated host (or a shell whose slot inject
+   * drops unknown keys) from turning an absent verb into a crash.
+   */
+  commitDiff?: ((sessionId: SessionId | undefined, oid: string, file: string) => Promise<CommitDiff | null>) | undefined
   /** Branch, upstream, ahead/behind, and configured remotes. */
   remote: (sessionId: SessionId | undefined) => Promise<RemoteView | null>
   /** `git fetch --prune`. */
@@ -212,6 +221,12 @@ export function apply(ctx: ClientContext): void {
           const resolved = pathOf(sessionId)
           if (!resolved.ok) return null
           const result = await git.commitDetail(resolved.path, oid)
+          return result.ok ? result.value : null
+        },
+        commitDiff: async (sessionId, oid, file) => {
+          const resolved = pathOf(sessionId)
+          if (!resolved.ok) return null
+          const result = await git.commitDiff(resolved.path, oid, file)
           return result.ok ? result.value : null
         },
         remote: async (sessionId) => {

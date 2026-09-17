@@ -10,9 +10,9 @@
  * @module dsh-git-panel/client/git/GitView
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
-import { predictCommitted, predictDiscarded, predictLineSelection, predictStaged, isBinaryPatch, type BranchRow, type CommitDetail, type DiffView, type GitError, type HistoryView, type LineStat, type RemoteView, type StatusFilesView } from '../../core/types.ts'
+import { predictCommitted, predictDiscarded, predictLineSelection, predictStaged, isBinaryPatch, type BranchRow, type CommitDetail, type CommitDiff, type DiffView, type GitError, type HistoryView, type LineStat, type RemoteView, type StatusFilesView } from '../../core/types.ts'
 import type { GitPanelKey } from '../locales.ts'
 import type { GitPanelInjected } from '../index.ts'
 import { errorMessage } from '../error-copy.ts'
@@ -356,6 +356,23 @@ export function GitView(props: GitViewProps) {
     })
     return request
   }, [props.diff, sessionId, fromBatch])
+
+  /**
+   * The commit review's per-file fetch, or `undefined` when this shell cannot
+   * provide it.
+   *
+   * The declared verb is optional, and a shell that drops unknown inject keys (or a
+   * host half from an older build) hands the view a props object without it. The
+   * check therefore has to happen HERE, on the verb itself: passing down a wrapper
+   * that closes over a missing verb would hide the absence from the review, which
+   * would then call the wrapper and throw — an error in an effect takes the whole
+   * view down, which is exactly how this turned the History tab blank once already.
+   */
+  const loadCommitDiff = useMemo((): ((oid: string, file: string) => Promise<CommitDiff | null>) | undefined => {
+    const verb = props.commitDiff
+    if (typeof verb !== 'function') return undefined
+    return (oid: string, file: string) => verb(sessionId, oid, file)
+  }, [props.commitDiff, sessionId])
 
   /**
    * Open one change row.
@@ -836,6 +853,7 @@ export function GitView(props: GitViewProps) {
                 // commit", and saying that while one is loading would be
                 // wrong rather than merely premature.
                 loading={detailLoading}
+                commitDiff={loadCommitDiff}
                 root={status?.root ?? ''}
                 t={t}
               />

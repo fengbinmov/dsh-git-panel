@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest'
 import {
   addArgv, classifySwitchFailure, cleanArgv, commitArgv, diffStatPatchArgv, discardRestoreArgv,
   extractBlockedPaths,
-  isSafeRepoPath, rmCachedArgv, statusFilesArgv, statusV2Argv, switchArgv, unstageArgv,
+  isSafeRepoPath, rmCachedArgv, showPathPatchArgv, statusFilesArgv, statusV2Argv, switchArgv, unstageArgv,
   untrackedDiffArgv, validateBranchName,
 } from '../src/core/git-command.ts'
 
@@ -55,6 +55,16 @@ describe('argv builders', () => {
     // Without -z git C-quotes paths and newline-separates records, which the
     // positional parser cannot read.
     expect(statusFilesArgv()).toContain('-z')
+  })
+
+  it('asks for one commit file behind the path separator', () => {
+    // The per-file route exists because the commit-wide patch is capped: this call
+    // is not, so a file reads whole however big the commit around it is. The `--`
+    // is what keeps a leading-dash path from being read as an option.
+    expect(showPathPatchArgv('abc1234', 'src/a.ts')).toEqual([
+      '-c', 'core.quotePath=false',
+      'show', '--patch', '--no-color', '--no-ext-diff', '--format=', 'abc1234', '--', 'src/a.ts',
+    ])
   })
 
   it('uses the null device form that needs no index mutation for an untracked diff', () => {

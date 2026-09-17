@@ -212,6 +212,19 @@ export const showPatchArgv = (oid: string): string[] => [...UNQUOTED,
   'show', '--patch', '--no-color', '--no-ext-diff', '--format=', oid,
 ]
 
+/**
+ * `git show <oid> -- <path>` — ONE file's patch out of a commit.
+ *
+ * The commit-wide `show` is capped, so a commit touching many files arrives with
+ * its tail cut off and those files have no section to render at all. A single
+ * path is not subject to that cap, so a file reads whole however large the commit
+ * around it is. The `--` separator keeps a path that begins with a dash from being
+ * read as an option.
+ */
+export const showPathPatchArgv = (oid: string, path: string): string[] => [...UNQUOTED,
+  'show', '--patch', '--no-color', '--no-ext-diff', '--format=', oid, '--', path,
+]
+
 /** `git remote -v` — configured remotes with their fetch/push URLs. */
 export const remoteListArgv = (): string[] => ['remote', '-v']
 

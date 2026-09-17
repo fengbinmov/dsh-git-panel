@@ -196,6 +196,17 @@ export interface DiffView {
   patch: string
 }
 
+/** One file's diff inside a commit, fetched on its own when the commit patch was capped. */
+export interface CommitDiff {
+  path: string
+  /** Whether git reported the content as binary. */
+  binary: boolean
+  /** Whether the patch hit the host's byte cap and was cut short. */
+  truncated: boolean
+  /** Unified diff text; empty when binary or when the commit did not touch line content. */
+  patch: string
+}
+
 /** One history row. */
 export interface HistoryCommit {
   oid: string
@@ -951,6 +962,16 @@ export function isDiffView(value: unknown): value is DiffView {
   const record = value as Record<string, unknown>
   return typeof record.path === 'string'
     && typeof record.staged === 'boolean'
+    && typeof record.binary === 'boolean'
+    && typeof record.truncated === 'boolean'
+    && typeof record.patch === 'string'
+}
+
+/** Narrow an unknown value onto {@link CommitDiff}. */
+export function isCommitDiff(value: unknown): value is CommitDiff {
+  if (typeof value !== 'object' || value === null) return false
+  const record = value as Record<string, unknown>
+  return typeof record.path === 'string'
     && typeof record.binary === 'boolean'
     && typeof record.truncated === 'boolean'
     && typeof record.patch === 'string'

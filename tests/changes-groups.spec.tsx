@@ -81,7 +81,7 @@ function mountWith(files: FileChange[]): {
       onStage={() => {}}
       onUnstage={(paths) => { unstagedCalls.push([...paths]) }}
       onDiscard={(paths) => { discarded.push([...paths]) }}
-      onCommit={() => {}}
+      onCommit={async () => true}
       t={t}
     />,
   )
@@ -107,7 +107,7 @@ function rail(files: FileChange[]): {
       onStage={() => {}}
       onUnstage={() => {}}
       onDiscard={() => {}}
-      onCommit={() => {}}
+      onCommit={async () => true}
       t={t}
     />,
   )
@@ -188,7 +188,7 @@ describe('opening a row', () => {
         onStage={() => {}}
         onUnstage={() => {}}
         onDiscard={() => {}}
-        onCommit={() => {}}
+        onCommit={async () => true}
         t={t}
       />,
     )

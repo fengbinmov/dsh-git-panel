@@ -577,16 +577,18 @@ export function GitView(props: GitViewProps) {
       .catch(() => { setBranches([]) })
   }, [props.branches, sessionId])
 
-  const onCommit = useCallback((message: string, amend: boolean): void => {
+  const onCommit = useCallback((message: string, amend: boolean): Promise<boolean> => {
     // The index is what the commit consumes, so its rows can go immediately.
     predict(predictCommitted)
-    void runMutation(async () => {
+    // The verdict goes back to the commit box, which is what decides whether the draft
+    // has been used up or is still the reader's to fix and send again.
+    return runMutation(async () => {
       const result = await props.commit(sessionId, message, amend)
       if (!result.ok) return result
       return { ok: true as const, summary: t('git.commit.done', { oid: result.oid }) }
     }).then((ok) => {
-      if (!ok) return
-      setSelection({ kind: 'none' })
+      if (ok) setSelection({ kind: 'none' })
+      return ok
     })
   }, [predict, props.commit, runMutation, sessionId, t])
 

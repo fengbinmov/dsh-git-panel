@@ -43,6 +43,7 @@ import {
   shareOf, shareScale, sideStatOf,
   type ChangeGroupKey, type DragPayload, type GroupShares,
 } from './helpers.ts'
+import { commitDraft, clearCommitDraft, rememberCommitDraft } from './commit-draft.ts'
 import { FileRowBody } from './FileRow.tsx'
 import css from './git.module.css'
 
@@ -67,7 +68,8 @@ export interface ChangesPanelProps {
   onStage: (paths: string[]) => void
   onUnstage: (paths: string[]) => void
   onDiscard: (paths: string[]) => void
-  onCommit: (message: string, amend: boolean) => void
+  /** Commit the index; resolves true when git took it, which is what retires the draft. */
+  onCommit: (message: string, amend: boolean) => Promise<boolean>
   t: Translate<GitPanelKey>
 }
 
@@ -218,7 +220,18 @@ function buildSections(status: StatusFilesView, t: Translate<GitPanelKey>): Sect
  */
 export function ChangesPanel(props: ChangesPanelProps) {
   const { status, selected, busy, t, onSelect, onPeek, onStage, onUnstage, onDiscard, onCommit } = props
-  const [message, setMessage] = useState('')
+  /**
+   * The commit box, seeded from this repository's saved draft.
+   *
+   * The shell renders only the active view, so the panel unmounts whenever the reader
+   * looks at their conversation — which used to take a half-written message with it.
+   * See `commit-draft`.
+   */
+  const root = status?.root ?? ''
+  const [message, setMessage] = useState(() => commitDraft(root))
+  // A different repository is a different draft. The panel can outlive a workspace
+  // switch, so the box follows the root rather than keeping the previous one's text.
+  useEffect(() => { setMessage(commitDraft(root)) }, [root])
   /** The in-flight row drag, or null. */
   const [drag, setDrag] = useState<DragState | null>(null)
   /** The group the pointer is over during a drag. */
@@ -388,9 +401,17 @@ export function ChangesPanel(props: ChangesPanelProps) {
    */
   const submit = useCallback((): void => {
     if (busy || message.trim() === '') return
-    onCommit(message, false)
-    setMessage('')
-  }, [busy, message, onCommit])
+    // The box is emptied only once git has TAKEN the message. It used to clear
+    // unconditionally, which discarded exactly the text the reader would have to type
+    // a second time: the commit that failed.
+    void onCommit(message, false)
+      .then((ok) => {
+        if (!ok) return
+        setMessage('')
+        clearCommitDraft(root)
+      })
+      .catch(() => {})
+  }, [busy, message, onCommit, root])
 
   const onKeyDown = useCallback((event: KeyboardEvent<HTMLTextAreaElement>): void => {
     // Ctrl/Cmd+Enter submits; a bare Enter must stay a newline, since commit
@@ -708,7 +729,12 @@ export function ChangesPanel(props: ChangesPanelProps) {
           value={message}
           placeholder={t('git.commit.placeholder')}
           disabled={busy}
-          onChange={(event) => { setMessage(event.target.value) }}
+          onChange={(event) => {
+            setMessage(event.target.value)
+            // Kept as it is typed rather than on unmount: a cleanup would not run
+            // when the tab is simply hidden, and the draft has to be there either way.
+            rememberCommitDraft(root, event.target.value)
+          }}
           onKeyDown={onKeyDown}
           data-gitgraph-commit-message
         />

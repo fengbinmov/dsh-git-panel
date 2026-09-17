@@ -354,12 +354,17 @@ export function DiffFileView({ file, t, side = null, onApplySelection }: DiffFil
             </button>
           ) : (
             <>
-              <button type="button" className={css.button} data-gitgraph-line-stage onClick={() => { apply('stage') }}>
+              <button
+                type="button"
+                className={`${css.button ?? ''} ${css.lineActionAdd ?? ''}`.trim()}
+                data-gitgraph-line-stage
+                onClick={() => { apply('stage') }}
+              >
                 {t('git.selection.stage')}
               </button>
               <button
                 type="button"
-                className={`${css.button ?? ''} ${css.buttonDanger ?? ''}`.trim()}
+                className={`${css.button ?? ''} ${css.lineActionDel ?? ''}`.trim()}
                 data-gitgraph-line-discard
                 onClick={() => { apply('discard') }}
               >

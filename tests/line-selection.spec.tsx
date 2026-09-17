@@ -107,6 +107,17 @@ describe('the preview line selection', () => {
     expect(actions?.querySelector('[data-gitgraph-line-discard]')).toBeNull()
   })
 
+  it('gives each action the colour of the rows it moves', () => {
+    // The bar used to be bare labels on a floating card — no fill, no border — which
+    // left the reader working out where one control ended and whether either was
+    // clickable. Each action now carries its own fill class, and the fill is the
+    // same colour the rows it acts on are drawn in.
+    const { rows, bar } = mount('pending')
+    drag(rows, 2, 3)
+    expect(bar()?.querySelector('[data-gitgraph-line-stage]')?.className).toContain('lineActionAdd')
+    expect(bar()?.querySelector('[data-gitgraph-line-discard]')?.className).toContain('lineActionDel')
+  })
+
   it('offers nothing on a commit\'s diff, where there is no index to apply to', () => {
     const { rows, container } = mount(null)
     drag(rows, 2, 3)

@@ -1088,26 +1088,90 @@
    clips it — so the buttons stay inside the preview. The diff scrolls sideways
    inside a container that clips, and the bar has to look anchored to the pane at
    the selection's height, which is what the effect that positions it keeps true
-   through any scroll. Built like the branch menu: layer-3, a border-l2 hairline,
-   the shell's elevation. */
+   through any scroll.
+   The card takes the shell's LIGHTEST layer, and every ink on it stays a token too.
+   Two separate problems met here, and the fix has to answer both:
+
+   - the previous layer (layer-3) is a blue-grey (#dde3f1 here) that read as dirty
+     against the selection's green wash. layer-1 is #f3f5fb in the same theme —
+     visually white, without being a hard-coded one;
+   - hard-coding white instead would have pinned the card to the light theme, and a
+     white card needs pinned dark inks to stay readable, which is a second hard-coded
+     palette.
+
+   Using tokens for BOTH the surface and the inks means one rule serves
+   body[data-ds-dark-theme] as well: the shell swaps every value at once, so the card
+   goes dark and its text goes light without this stylesheet naming a single colour. */
 .lineActions {
   position: absolute;
   z-index: 20;
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 3px 3px 3px 8px;
+  gap: 6px;
+  padding: 4px;
   border: 1px solid var(--dsw-alias-border-l2);
   border-radius: 10px;
-  background: var(--dsw-alias-bg-layer-3);
+  background: var(--dsw-alias-bg-layer-1);
   box-shadow: var(--dsw-elevation-prominent);
 }
 
+/* The count reads as the bar's LABEL rather than as one more control: secondary ink
+   at the size of the buttons beside it, held off them by a hairline. It used to be
+   the faintest thing on the bar while being the line the reader checks first — how
+   many lines they are about to move. */
 .lineCount {
-  color: var(--git-ink-4);
+  color: var(--git-ink-2);
   font-family: var(--git-mono);
-  font-size: 11px;
+  font-size: 12px;
   white-space: nowrap;
+  padding-right: 8px;
+  border-right: 1px solid var(--dsw-alias-border-l2);
+}
+
+/* Every action here is an OUTLINED control with an OPAQUE fill.
+   Two things about this bar made a translucent tint the wrong material, and both are
+   worth naming. It floats over rows that are already washed in the change's colour,
+   so a 10% green button landed on a 10% green selection and the two added up to one
+   flat green field: no edge, no button, nothing to aim at. And the wash colours are
+   state tints, which say nothing about legibility on top of each other.
+   So the fill is an OPAQUE mix of the action's colour over the card's own background,
+   the ink is that colour at full strength, and the border is the same colour again.
+   It reads as a control against any row beneath it, and the label keeps the contrast
+   of ink-on-surface rather than depending on a design token's brightness under white
+   text.
+   Colour lives in variables so the hover rule can deepen whichever one the action
+   chose, without a rule per action. Every value here is a token for the same reason
+   the card's are: the state colours are redefined for the dark theme, so a 12% mix
+   over the dark card is a dark tint with a light ink on it, with no second rule. */
+.lineActions .button {
+  --line-hue: var(--dsw-alias-button-primary-fill);
+  --line-fill: color-mix(in srgb, var(--line-hue) 12%, var(--dsw-alias-bg-layer-1));
+  --line-ink: var(--line-hue);
+  height: 26px;
+  padding: 0 12px;
+  font-weight: 600;
+  border: 1px solid color-mix(in srgb, var(--line-hue) 45%, transparent);
+  background: var(--line-fill);
+  color: var(--line-ink);
+}
+
+/* The ink is restated here: the shared .button:hover rule would otherwise repaint it
+   with the theme's hover ink, which is a different colour from the one this action
+   chose. */
+.lineActions .button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--line-hue) 24%, var(--dsw-alias-bg-layer-1));
+  color: var(--line-ink);
+}
+
+/* The two index actions take the colours the diff itself uses — the added side's
+   green and the deleted side's red — so the button and the lines it moves stay in
+   one family. */
+.lineActions .lineActionAdd {
+  --line-hue: var(--dsw-alias-state-success-primary);
+}
+
+.lineActions .lineActionDel {
+  --line-hue: var(--dsw-alias-state-error-primary);
 }
 
 /* The gutter no longer tints itself: the row's wash and rail already say what the

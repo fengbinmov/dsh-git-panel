@@ -81,7 +81,55 @@ function drag(rows: HTMLElement[], from: number, to: number): void {
   fireEvent(gutter(to), new MouseEvent('pointerup', at(60)))
 }
 
+/** One row's gutter cell — the handle a drag starts on. */
+function gutterOf(rows: HTMLElement[], index: number): HTMLElement {
+  const cell = rows[index]?.querySelector<HTMLElement>('[data-diff-gutter]')
+  if (cell === null || cell === undefined) throw new Error(`row ${index} has no gutter`)
+  return cell
+}
+
 afterEach(cleanup)
+
+describe('the cursor a row drag shows', () => {
+  /**
+   * The handle has to LOOK like a handle for the whole gesture.
+   *
+   * The drag starts on the gutter, which owns the resize cursor, but the pointer
+   * leaves it immediately and travels over the code — and the code has an ordinary
+   * cursor of its own. Handing the document the cursor for the length of the drag is
+   * what keeps the cue on screen exactly while it is being used.
+   */
+  const at = (y: number) => ({ bubbles: true, button: 0, clientX: 10, clientY: y })
+
+  it('takes the document cursor on pointerdown and keeps it while extending', () => {
+    const { rows } = mount('pending')
+    expect(document.body.style.cursor).toBe('')
+    fireEvent(gutterOf(rows, 2), new MouseEvent('pointerdown', at(10)))
+    expect(document.body.style.cursor).toBe('row-resize')
+    // The range keeps growing under the pointer, well past the gutter it started on.
+    fireEvent(gutterOf(rows, 4), new MouseEvent('pointermove', at(60)))
+    expect(document.body.style.cursor).toBe('row-resize')
+  })
+
+  it('hands the cursor back when the selection ends', () => {
+    const { rows } = mount('pending')
+    const handle = gutterOf(rows, 2)
+    fireEvent(handle, new MouseEvent('pointerdown', at(10)))
+    fireEvent(handle, new MouseEvent('pointermove', at(60)))
+    fireEvent(handle, new MouseEvent('pointerup', at(60)))
+    expect(document.body.style.cursor).toBe('')
+  })
+
+  it('puts the cursor back if the pane is unmounted mid-drag', () => {
+    // Switching files while the pointer is down unmounts this pane; the document is
+    // not the pane's to leave holding a cursor.
+    const { rows } = mount('pending')
+    fireEvent(gutterOf(rows, 2), new MouseEvent('pointerdown', at(10)))
+    expect(document.body.style.cursor).toBe('row-resize')
+    cleanup()
+    expect(document.body.style.cursor).toBe('')
+  })
+})
 
 describe('the preview line selection', () => {
   it('offers stage and discard for a pending preview', () => {

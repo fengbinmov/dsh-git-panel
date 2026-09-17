@@ -96,6 +96,8 @@ export function DiffFileView({ file, t, side = null, onApplySelection }: DiffFil
   const container = useRef<HTMLDivElement | null>(null)
   const barRef = useRef<HTMLDivElement | null>(null)
   const dragging = useRef(false)
+  /** The document's cursor before a drag took it over; null while no drag owns it. */
+  const cursorBeforeDrag = useRef<string | null>(null)
   // The live selection: the row the drag started on and the row it is over. Kept as
   // two indices rather than a set so extending it is a state update, not a rebuild.
   const [range, setRange] = useState<{ anchor: number; head: number } | null>(null)
@@ -240,6 +242,33 @@ export function DiffFileView({ file, t, side = null, onApplySelection }: DiffFil
     return raw === undefined || raw === null ? null : Number(raw)
   }
 
+  /**
+   * Hand the DOCUMENT the drag's cursor for the length of the gesture.
+   *
+   * The gesture starts on the gutter, which owns the resize cursor — but the pointer
+   * leaves it on the first pixel of movement and travels over the code, and the code
+   * has an ordinary cursor of its own. Without this the handle reads as a handle only
+   * until the reader grabs it, and shows an arrow for everything after that: exactly
+   * when the reader most needs to be told the drag is still going.
+   *
+   * The cursor belongs to the DRAG rather than to the element under the pointer, so
+   * the document carries it — the same reasoning, and the same shape, as the pane
+   * dividers in `pane-split`.
+   */
+  const takeDragCursor = (): void => {
+    if (cursorBeforeDrag.current !== null) return
+    cursorBeforeDrag.current = document.body.style.cursor
+    document.body.style.cursor = 'row-resize'
+  }
+  const releaseDragCursor = (): void => {
+    if (cursorBeforeDrag.current === null) return
+    document.body.style.cursor = cursorBeforeDrag.current
+    cursorBeforeDrag.current = null
+  }
+  // Switching files mid-drag unmounts this pane; the document must not keep the
+  // cursor afterwards.
+  useEffect(() => releaseDragCursor, [])
+
   const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>): void => {
     if (!selectable || event.button !== 0) return
     const index = gutterRowAt(event)
@@ -249,6 +278,7 @@ export function DiffFileView({ file, t, side = null, onApplySelection }: DiffFil
     // begins in the text beside the gutter never reaches this line.
     event.preventDefault()
     dragging.current = true
+    takeDragCursor()
     // Pointer capture keeps a drag that leaves the diff (or the window) alive; it is
     // optional because a pointer that is not active — or a DOM without the API —
     // throws rather than failing quietly.
@@ -270,6 +300,7 @@ export function DiffFileView({ file, t, side = null, onApplySelection }: DiffFil
   const endDrag = (event: ReactPointerEvent<HTMLDivElement>): void => {
     if (!dragging.current) return
     dragging.current = false
+    releaseDragCursor()
     try {
       if (event.currentTarget.hasPointerCapture?.(event.pointerId) === true) {
         event.currentTarget.releasePointerCapture?.(event.pointerId)

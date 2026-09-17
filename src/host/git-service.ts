@@ -27,6 +27,7 @@ import {
   forEachRefArgv,
   headBranchArgv, headShortArgv, historyArgv, isSafeRepoPath, mergeAbortArgv,
   mergeArgv, OPERATION_MARKERS, pullArgv, pushArgv, rebaseAbortArgv,
+  lsTreeSizeArgv,
   rebaseArgv, remoteListArgv, rmCachedArgv, showMetaArgv, showPatchArgv, showPathPatchArgv, showStatArgv,
   statusFilesArgv, statusV2Argv, switchArgv, topLevelArgv,
   unstageArgv, untrackedDiffArgv, untrackedProbeArgv, upstreamArgv, validateBranchName,
@@ -34,7 +35,7 @@ import {
 } from '../core/git-command.ts'
 import {
   isBinaryPatch, operationNameFromMarkers, parseAheadBehind, parseBranches, parseHistory,
-  parseNumstat, parseRemotes, parseShowMeta, parseStatPatch, parseStatusV2, selectionFragmentError,
+  parseNumstat, parseRemotes, parseShowMeta, parseStatPatch, parseStatusV2, parseTreeSize, selectionFragmentError,
   withLineStats,
   type BranchesView, type CommitDetail, type CommitDiff, type CommitOutcome, type DiffView, type GitError,
   type HistoryView, type MutationResult, type RemoteRow, type RemoteView, type RepoProbe,
@@ -610,7 +611,15 @@ export class GitService {
     if (!gated.ok) return null
     const root = await this.repoRoot(gated.canonical, signal)
     if (root === null) return null
-    const result = await this.runner.run(showPathPatchArgv(oid, file), root, signal)
+    // The sizes ride along with the patch: a file that turns out to have no text
+    // to diff — binary, mode flip, empty rewrite — is exactly the file whose only
+    // readable fact is how big it was and how big it became. Two extra spawns,
+    // issued together, on a route that already costs one.
+    const [result, before, after] = await Promise.all([
+      this.runner.run(showPathPatchArgv(oid, file), root, signal),
+      this.blobSize(root, `${oid}^1`, file, signal),
+      this.blobSize(root, oid, file, signal),
+    ])
     if (result.exitCode !== 0) return null
     const patch = result.stdout
     const truncated = patch.length > PATCH_CAP_CHARS
@@ -619,7 +628,24 @@ export class GitService {
       binary: isBinaryPatch(patch),
       truncated,
       patch: truncated ? patch.slice(0, PATCH_CAP_CHARS) : patch,
+      before,
+      after,
     }
+  }
+
+  /**
+   * How many bytes one path holds at one revision, or null when it holds none there.
+   *
+   * `<rev>^1` is the first parent — the side every other commit read here already
+   * diffs against — so a merge reports the same before/after as its patch does.
+   * A path absent from that revision (a file the commit added) answers with an
+   * empty tree listing, and a revision that does not resolve (the root commit has
+   * no parent) fails the command outright; both read as null.
+   */
+  private async blobSize(root: string, rev: string, file: string, signal?: AbortSignal): Promise<number | null> {
+    const result = await this.runner.run(lsTreeSizeArgv(rev, file), root, signal)
+    if (result.exitCode !== 0) return null
+    return parseTreeSize(result.stdout)
   }
 
   /** The header's sync state: branch, upstream, ahead/behind, and configured remotes. */

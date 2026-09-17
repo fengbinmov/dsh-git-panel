@@ -460,7 +460,7 @@ describe('GitService', () => {
     it('reads one commit file on its own, which is what the cap cannot cut', async () => {
       // The per-file route exists because the commit-wide patch is capped. Both
       // files of this commit are touched, and each reads whole on its own.
-      await writeFile(join(repo, 'a.txt'), 'two\n')
+      await writeFile(join(repo, 'a.txt'), 'two three\n')
       await writeFile(join(repo, 'second.txt'), 's\n')
       await service.stage(repo, ['a.txt', 'second.txt'])
       expect((await service.commit(repo, 'both')).ok).toBe(true)
@@ -474,6 +474,11 @@ describe('GitService', () => {
       expect(first?.patch).toContain('+two')
       // One path only: the other file's section is not in this answer.
       expect(first?.patch).not.toContain('second.txt')
+      // The two sizes: the first parent's blob, and this commit's. 'one\n' is four
+      // bytes and 'two three\n' is ten, which is what the pane reports when a file
+      // turns out to have no text to diff.
+      expect(first?.before).toBe(4)
+      expect(first?.after).toBe(10)
 
       const second = await service.commitDiff(repo, oid, 'second.txt')
       expect(second?.patch).toContain('+s')
@@ -487,6 +492,10 @@ describe('GitService', () => {
       const binary = await service.commitDiff(repo, binaryOid, 'blob.bin')
       expect(binary?.binary).toBe(true)
       expect(binary?.patch).not.toContain('@@')
+      // A binary file has no lines, so its sizes are the whole story: the five bytes
+      // just written, and no previous version to compare them against.
+      expect(binary?.before).toBeNull()
+      expect(binary?.after).toBe(5)
     })
 
     it('answers per file for a commit whose whole patch was capped', async () => {
@@ -557,6 +566,10 @@ describe('GitService', () => {
       for (const file of detail?.files ?? []) {
         const one = await service.commitDiff(repo, oid, file.path)
         expect(one?.patch).toContain('+from feature')
+        // The "before" side is the merge's FIRST parent — the same side the patch
+        // diffs against — so a file the merge introduced has no size there.
+        expect(one?.before).toBeNull()
+        expect(one?.after).toBe('from feature\n'.length)
       }
     })
 

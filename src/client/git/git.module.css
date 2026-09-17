@@ -944,6 +944,15 @@
   font-size: 12px;
 }
 
+/* The sizes a file changed between, under the note that says there is no text to
+   show. It belongs to that note, so it takes no top padding of its own: the note
+   above it already owns the gap, and two paddings would read as two paragraphs. */
+.diffSize {
+  padding: 0 10px 12px;
+  color: var(--git-ink-3);
+  font-size: 12px;
+}
+
 .diffPane {
   display: flex;
   flex-direction: column;

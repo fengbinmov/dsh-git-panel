@@ -369,7 +369,7 @@ describe('the commit review of a capped commit', () => {
       reviewVerbs(cappedDetail(), {
         commitDiff: async (_session, oid, file) => {
           asked.push(`${oid}|${file}`)
-          return { path: file, binary: false, truncated: false, patch: sectionFor(file) }
+          return { path: file, binary: false, truncated: false, patch: sectionFor(file), before: 8, after: 9 }
         },
       }),
     )
@@ -426,6 +426,86 @@ describe('the commit review of a capped commit', () => {
     })
     expect(container.querySelector('[data-gitgraph-review-oid]')).not.toBeNull()
     expect(container.querySelector('[data-gitgraph-review-file="b.txt"]')).not.toBeNull()
+  })
+})
+
+/** One binary file's section: a status line, and no rows to draw from it. */
+const BINARY_PATCH = [
+  'diff --git a/logo.png b/logo.png',
+  'index 1111111..2222222 100644',
+  'Binary files a/logo.png and b/logo.png differ',
+  '',
+].join('\n')
+
+/** A commit whose only changed file is binary: nothing to diff, and a size on each side. */
+function binaryDetail(): CommitDetail {
+  return {
+    ...detailOf(),
+    files: [{ path: 'logo.png', additions: 0, deletions: 0, binary: true }],
+    patch: '',
+    truncated: false,
+  }
+}
+
+/**
+ * A file with no lines to show still has to say something.
+ *
+ * "No textual diff" covers a 4 KB stub and a 400 MB asset alike, so the pane
+ * reports what the file changed BETWEEN — the two blob sizes — which is the only
+ * fact left once the text is gone.
+ */
+describe('the sizes of a file with no lines to show', () => {
+  const sized = (before: number | null, after: number | null): Partial<GitPanelInjected> => ({
+    commitDiff: async (_session, _oid, file) => ({
+      path: file, binary: true, truncated: false, patch: BINARY_PATCH, before, after,
+    }),
+  })
+
+  it('reports what a binary file changed between', async () => {
+    const { container } = mountView(
+      () => statusOf([tracked('src/a.ts')], { worktree: TRACKED_PATCH, staged: '' }),
+      path => diffOf(path, TRACKED_PATCH),
+      reviewVerbs(binaryDetail(), sized(1024, 4096)),
+    )
+    await openCommit(container)
+
+    await waitFor(() => {
+      expect(container.querySelector('[data-gitgraph-file-size="logo.png"]')).not.toBeNull()
+    })
+    const pane = container.querySelector('[data-gitgraph-part="review-diff"]')
+    // Both notes: what kind of file it is, and how big it became.
+    expect(pane?.textContent).toContain('git.review.binary')
+    expect(pane?.textContent).toContain('git.review.size')
+  })
+
+  it('names an absent side rather than printing zero bytes', async () => {
+    // A binary file the commit ADDED has no previous version. "0 B → 4 KB" would
+    // describe a file that never existed.
+    const { container } = mountView(
+      () => statusOf([tracked('src/a.ts')], { worktree: TRACKED_PATCH, staged: '' }),
+      path => diffOf(path, TRACKED_PATCH),
+      reviewVerbs(binaryDetail(), sized(null, 4096)),
+    )
+    await openCommit(container)
+
+    await waitFor(() => {
+      expect(container.querySelector('[data-gitgraph-file-size="logo.png"]')).not.toBeNull()
+    })
+  })
+
+  it('leaves the sizes off a file whose diff has lines to read', async () => {
+    const { container } = mountView(
+      () => statusOf([tracked('src/a.ts')], { worktree: TRACKED_PATCH, staged: '' }),
+      path => diffOf(path, TRACKED_PATCH),
+      reviewVerbs(detailOf(), sized(8, 9)),
+    )
+    await openCommit(container)
+
+    await waitFor(() => { expect(container.querySelector('[data-gitgraph-review-file="a.txt"]')).not.toBeNull() })
+    await waitFor(() => {
+      expect(container.querySelector('[data-gitgraph-part="review-diff"] [data-diff-kind]')).not.toBeNull()
+    })
+    expect(container.querySelector('[data-gitgraph-file-size]')).toBeNull()
   })
 })
 

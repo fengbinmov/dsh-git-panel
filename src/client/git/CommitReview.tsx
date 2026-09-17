@@ -20,6 +20,7 @@ import type { CommitDetail, CommitDiff } from '../../core/types.ts'
 import type { GitPanelKey } from '../locales.ts'
 import { DiffFileView, statusBadgeOf } from './DiffFileView.tsx'
 import { reviewFiles, splitPatch, type FileDiff } from './diff-parse.ts'
+import { formatBytes } from './helpers.ts'
 import { FilePathCell, FileRowBody, FileStatCell } from './FileRow.tsx'
 import { usePaneSplit } from './pane-split.ts'
 import css from './git.module.css'
@@ -40,6 +41,16 @@ export interface CommitReviewProps {
   /** The repository root, which scopes the remembered column split. */
   root: string
   t: Translate<GitPanelKey>
+}
+
+/** One file's per-file fetch: the parsed section, plus the sizes the route reported. */
+interface FetchedFile {
+  /** The file's section, or null when the patch carried none to parse. */
+  diff: FileDiff | null
+  /** Bytes at the first parent; null when the path did not exist there. */
+  before: number | null
+  /** Bytes in this commit; null when the commit removed the path. */
+  after: number | null
 }
 
 /**
@@ -70,8 +81,8 @@ export function CommitReview({ detail, loading, commitDiff, root, t }: CommitRev
   )
   /** The file whose diff is on show; null means "the first one". */
   const [picked, setPicked] = useState<string | null>(null)
-  /** Per-file fetches that came back, keyed by path. `null` means "fetched, nothing textual". */
-  const [fetched, setFetched] = useState<ReadonlyMap<string, FileDiff | null>>(new Map())
+  /** Per-file fetches that came back, keyed by path. */
+  const [fetched, setFetched] = useState<ReadonlyMap<string, FetchedFile>>(new Map())
   /** Paths whose fetch is still on the wire. */
   const [fetching, setFetching] = useState<ReadonlySet<string>>(() => new Set())
   /**
@@ -97,9 +108,19 @@ export function CommitReview({ detail, loading, commitDiff, root, t }: CommitRev
   const activePath = active?.path ?? null
   /** The section the commit patch itself carried, when it carried one. */
   const inlineDiff = active?.diff ?? null
-  const fetchedDiff = activePath === null ? undefined : fetched.get(activePath)
+  const entry = activePath === null ? undefined : fetched.get(activePath)
   /** What the pane renders: the commit's own section first, else the fetched one. */
-  const shown = inlineDiff ?? fetchedDiff ?? null
+  const shown = inlineDiff ?? entry?.diff ?? null
+  /**
+   * Whether there are LINES to read.
+   *
+   * This is the question the sizes answer instead: a binary file, a mode flip or
+   * an empty rewrite all reach the pane with nothing to draw, and "no textual
+   * diff" on its own leaves the reader unable to tell a 4 KB stub from a 400 MB
+   * asset.
+   */
+  const hasText = shown !== null && shown.status !== 'binary' && shown.rows.length > 0
+  const binary = (active?.binary ?? false) || shown?.status === 'binary'
   const waiting = activePath !== null && fetching.has(activePath)
   /**
    * Whether the pane should say it is loading rather than that it cannot show the
@@ -109,16 +130,17 @@ export function CommitReview({ detail, loading, commitDiff, root, t }: CommitRev
    * A path that was asked for and came back with nothing is deliberately NOT busy:
    * that is the case the note below describes.
    */
-  const pending = active !== undefined && active.diff === null && !active.binary
-    && typeof commitDiff === 'function' && fetchedDiff === undefined
-    && (activePath !== null && !asked.current.has(activePath))
+  const pending = active !== undefined && !hasText && entry === undefined
+    && typeof commitDiff === 'function'
+    && activePath !== null && !asked.current.has(activePath)
   const busy = waiting || pending
 
   useEffect(() => {
     if (detail === null || active === undefined || activePath === null) return undefined
-    // Nothing to fetch: the commit patch already describes this file, or the file
-    // is binary and has no text to show.
-    if (active.diff !== null || active.binary) return undefined
+    // Nothing to fetch: the commit's own patch already has lines to draw. It is the
+    // files WITHOUT lines — binary, a mode flip, a section the cap cut — that need
+    // this route, both for the patch it can still supply and for the sizes.
+    if (active.diff !== null && active.diff.rows.length > 0) return undefined
     if (typeof commitDiff !== 'function' || asked.current.has(activePath)) return undefined
     asked.current.add(activePath)
     let live = true
@@ -135,8 +157,15 @@ export function CommitReview({ detail, loading, commitDiff, root, t }: CommitRev
       if (!live) return
       setFetched((current) => {
         const map = new Map(current)
-        const parsed = next === null || next.binary ? [] : splitPatch(next.patch)
-        map.set(activePath, parsed[0] ?? null)
+        // A binary patch is parsed rather than discarded: its section is what tells
+        // the pane which of the two notes this file gets, and it carries no rows
+        // either way.
+        const parsed = next === null ? [] : splitPatch(next.patch)
+        map.set(activePath, {
+          diff: parsed[0] ?? null,
+          before: next?.before ?? null,
+          after: next?.after ?? null,
+        })
         return map
       })
     }
@@ -155,6 +184,22 @@ export function CommitReview({ detail, loading, commitDiff, root, t }: CommitRev
   const totals = files.reduce(
     (sum, file) => ({ additions: sum.additions + file.additions, deletions: sum.deletions + file.deletions }),
     { additions: 0, deletions: 0 },
+  )
+
+  /**
+   * The sizes, for the files that have no lines to show.
+   *
+   * Absent on a side means the path did not exist there, which is itself the
+   * interesting part: a binary file the commit ADDED has nothing to compare against,
+   * and the note says so rather than printing "0 B".
+   */
+  const sizeNote = entry === undefined || (entry.before === null && entry.after === null) ? null : (
+    <div className={css.diffSize} data-gitgraph-file-size={activePath ?? ''}>
+      {t('git.review.size', {
+        before: entry.before === null ? t('git.review.sizeAbsent') : formatBytes(entry.before),
+        after: entry.after === null ? t('git.review.sizeAbsent') : formatBytes(entry.after),
+      })}
+    </div>
   )
 
   const copyOid = useCallback((): void => {
@@ -262,20 +307,23 @@ export function CommitReview({ detail, loading, commitDiff, root, t }: CommitRev
             {/* Every branch below is a NOTE, never nothing: the pane has to say
                 something whatever happened, which is the whole point of the
                 per-file route — the old code had one note for four situations. */}
-            {active !== undefined && shown === null && active.binary && (
+            {active !== undefined && shown === null && binary && (
               <div className={css.diffBlank}>{t('git.review.binary')}</div>
             )}
-            {active !== undefined && shown === null && !active.binary && busy && (
+            {active !== undefined && shown === null && !binary && busy && (
               <div className={css.diffBlank}>{t('git.loading')}</div>
             )}
-            {active !== undefined && shown === null && !active.binary && !busy && fetchedDiff !== undefined && (
+            {active !== undefined && shown === null && !binary && !busy && entry !== undefined && (
               <div className={css.diffBlank}>{t('git.review.noText')}</div>
             )}
             {/* No section in the commit patch and no way to fetch one: a verb this
                 shell did not provide, or a fetch that failed. */}
-            {active !== undefined && shown === null && !active.binary && !busy && fetchedDiff === undefined && (
+            {active !== undefined && shown === null && !binary && !busy && entry === undefined && (
               <div className={css.diffBlank}>{t('git.review.truncated')}</div>
             )}
+            {/* What a file with no lines can still say about itself — the sizes it
+                changed between. It sits under the note, not instead of it. */}
+            {active !== undefined && !hasText && sizeNote}
           </div>
         </div>
       </div>

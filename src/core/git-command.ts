@@ -244,6 +244,23 @@ export const showPathPatchArgv = (oid: string, path: string): string[] => [...UN
   'show', '--patch', '--first-parent', '--no-color', '--no-ext-diff', '--format=', oid, '--', path,
 ]
 
+/**
+ * `git ls-tree -l -z <rev> -- <path>` — how many BYTES one path holds at one revision.
+ *
+ * This is what a file with no text to diff can still say about itself: a binary
+ * change, a mode change, an empty rewrite. The size is git's own answer for the
+ * blob the revision points at, so it needs no working-tree read and no index
+ * mutation, and a path that does not exist at that revision simply answers with
+ * nothing (exit 0, empty output) — which the caller reads as "absent on this side",
+ * the new-file and deleted-file cases.
+ *
+ * `-l` is what adds the size column; `-z` keeps a path with a tab or newline
+ * readable; `--` keeps a leading-dash path out of the option parser.
+ */
+export const lsTreeSizeArgv = (rev: string, path: string): string[] => [...UNQUOTED,
+  'ls-tree', '-l', '-z', rev, '--', path,
+]
+
 /** `git remote -v` — configured remotes with their fetch/push URLs. */
 export const remoteListArgv = (): string[] => ['remote', '-v']
 

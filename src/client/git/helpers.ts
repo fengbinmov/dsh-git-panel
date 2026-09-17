@@ -362,6 +362,28 @@ export const MIN_GROUP_SHARE_FRACTION = 0.2
  *   fraction of the pair's combined share.
  * @returns the adjusted pair.
  */
+/**
+ * A byte count a reader can compare at a glance.
+ *
+ * Exact below 1 KiB, then one decimal in whichever unit keeps the number small —
+ * 1048576 reads as "1 MB" rather than "1048576 B", because the question a size
+ * answers in a diff pane is "roughly how big", not "how many bytes exactly".
+ * @param bytes - a non-negative byte count.
+ */
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  const units = ['KB', 'MB', 'GB', 'TB']
+  let value = bytes / 1024
+  let unit = 0
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024
+    unit += 1
+  }
+  // Three digits stop needing a decimal: "512 KB" reads better than "512.0 KB".
+  const rounded = value >= 100 ? Math.round(value) : Math.round(value * 10) / 10
+  return `${rounded} ${units[unit]}`
+}
+
 export function dragShares(
   startUpper: number,
   startLower: number,

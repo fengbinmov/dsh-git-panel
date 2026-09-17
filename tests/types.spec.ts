@@ -7,7 +7,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   isBinaryPatch, isCommitDiff, isStatusFilesView, operationNameFromMarkers, parseAheadBehind, parseBranches,
-  parseHistory, parseNumstat, parseRemotes, parseShowMeta, parseStatPatch, parseStatusV2,
+  parseHistory, parseNumstat, parseRemotes, parseShowMeta, parseStatPatch, parseStatusV2, parseTreeSize,
   predictCommitted, predictDiscarded, predictLineSelection, predictStaged, withLineStats,
   type FileChange, type StatusFilesView,
 } from '../src/core/types.ts'
@@ -16,17 +16,43 @@ const NUL = '\u0000'
 const ZERO = '0'.repeat(40)
 
 describe('isCommitDiff', () => {
-  it('accepts one file\'s patch and rejects a half-built view', () => {
+  /** A well-formed per-file view, with whatever the case under test overrides. */
+  const view = (over: Record<string, unknown> = {}): unknown => ({
+    path: 'a.txt', binary: false, truncated: false, patch: '', before: 12, after: 34, ...over,
+  })
+
+  it('accepts one file\'s patch together with its two sizes', () => {
     // The route boundary runs this before the answer reaches the browser, so a
     // malformed one is refused rather than rendered as a file with no rows.
-    expect(isCommitDiff({ path: 'a.txt', binary: false, truncated: false, patch: 'diff --git a/a.txt b/a.txt' })).toBe(true)
-    // The per-file view carries no `staged` field: a commit file is not a side of
-    // the index, and a payload claiming to be one side is not this shape.
-    expect(isCommitDiff({ path: 'a.txt', staged: false, binary: false, truncated: false, patch: '' })).toBe(true)
-    expect(isCommitDiff({ path: 'a.txt', binary: false, truncated: false })).toBe(false)
-    expect(isCommitDiff({ path: 'a.txt', binary: false, truncated: 'no', patch: '' })).toBe(false)
+    expect(isCommitDiff(view({ patch: 'diff --git a/a.txt b/a.txt' }))).toBe(true)
+    // A side the path does not exist on is null — NOT a missing key. The pane reads
+    // that difference: null says "no such file", absent says "not reported".
+    expect(isCommitDiff(view({ before: null }))).toBe(true)
+    expect(isCommitDiff(view({ after: null }))).toBe(true)
+    expect(isCommitDiff(view({ before: null, after: null }))).toBe(true)
+  })
+
+  it('rejects a view missing a size, or carrying a malformed one', () => {
+    expect(isCommitDiff(view({ before: undefined }))).toBe(false)
+    expect(isCommitDiff(view({ after: undefined }))).toBe(false)
+    expect(isCommitDiff(view({ before: '12' }))).toBe(false)
+    expect(isCommitDiff(view({ patch: undefined }))).toBe(false)
     expect(isCommitDiff(null)).toBe(false)
     expect(isCommitDiff('a.txt')).toBe(false)
+  })
+})
+
+describe('parseTreeSize', () => {
+  it('reads the size column out of one ls-tree -l record', () => {
+    // The size is right-aligned in spaces, which is why the match allows a run of
+    // them; the path follows a tab, and -z terminates the record.
+    expect(parseTreeSize('100644 blob 05030f693c   1234\tAssets/car.prefab\u0000')).toBe(1234)
+    expect(parseTreeSize('100644 blob abc123      1\ta.txt\u0000')).toBe(1)
+    // A submodule or a tree prints a literal dash where a size would be: not a size.
+    expect(parseTreeSize('160000 commit abc123       -\tvendor/lib\u0000')).toBeNull()
+    // An absent path answers with nothing at all, which is "no such file here".
+    expect(parseTreeSize('')).toBeNull()
+    expect(parseTreeSize('garbage')).toBeNull()
   })
 })
 

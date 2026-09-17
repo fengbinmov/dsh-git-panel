@@ -205,6 +205,17 @@ export interface CommitDiff {
   truncated: boolean
   /** Unified diff text; empty when binary or when the commit did not touch line content. */
   patch: string
+  /**
+   * How many bytes the path held at the FIRST parent, or null when it did not
+   * exist there (an added file).
+   *
+   * A file with no text to diff still changed: a binary, a mode flip, an empty
+   * rewrite. The two sizes are what the pane reports in that case, because "no
+   * textual diff" on its own tells the reader nothing about what happened.
+   */
+  before: number | null
+  /** How many bytes the path holds in this commit, or null when the commit removed it. */
+  after: number | null
 }
 
 /** One history row. */
@@ -846,6 +857,22 @@ export function parseNumstat(stdout: string): CommitFileStat[] {
   return files
 }
 
+/**
+ * The byte size out of ONE `git ls-tree -l -z` record, or null when git reported none.
+ *
+ * The record is `<mode> SP <type> SP <object> SP <size> TAB <path>`, with the size
+ * column right-aligned in spaces — hence the ` +` before the digits. A submodule
+ * or a tree carries a literal `-` there instead of a number, which is not a size
+ * and reads as null; an absent path produces no record at all, and the caller
+ * turns that empty answer into "this side has no such file".
+ */
+export function parseTreeSize(stdout: string): number | null {
+  const match = /^\d+ \S+ [0-9a-f]+ +(\d+)\t/.exec(stdout)
+  if (match === null) return null
+  const size = Number(match[1])
+  return Number.isFinite(size) ? size : null
+}
+
 /** Parse `git remote -v` into deduplicated rows carrying both URLs. */
 export function parseRemotes(stdout: string): RemoteRow[] {
   const byName = new Map<string, RemoteRow>()
@@ -971,10 +998,13 @@ export function isDiffView(value: unknown): value is DiffView {
 export function isCommitDiff(value: unknown): value is CommitDiff {
   if (typeof value !== 'object' || value === null) return false
   const record = value as Record<string, unknown>
+  const size = (candidate: unknown): boolean => candidate === null || typeof candidate === 'number'
   return typeof record.path === 'string'
     && typeof record.binary === 'boolean'
     && typeof record.truncated === 'boolean'
     && typeof record.patch === 'string'
+    && size(record.before)
+    && size(record.after)
 }
 
 /** Narrow an unknown value onto {@link HistoryCommit}. */

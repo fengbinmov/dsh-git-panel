@@ -1,7 +1,7 @@
 {
   "name": "@fengbinmov/dsh-git-panel",
   "description": "External dsh Web GUI plugin: a Git tab (changes, staging, commits, diffs, history, branches, remotes) registered as a Conversation View, packaged as a dsh profile bundle",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "packageManager": "pnpm@11.7.0",
   "engines": {
@@ -16,9 +16,6 @@
   },
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",
-
-
-  
   "exports": {
     ".": {
       "types": "./lib/types/index.d.ts",

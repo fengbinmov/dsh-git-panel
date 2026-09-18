@@ -34,7 +34,7 @@ DSH Web GUI 的 **Git 面板**插件：在会话界面的标签栏里，紧挨�
   `Ctrl` 点击多选、`Shift` 点击范围选择。
 - **行内没有按钮**：列表保持干净，动作全部通过拖拽和键盘完成。
 - **`Delete` 键**：未暂存行 = 丢弃改动（**立即执行，无二次确认**）；已暂存行 = 取消暂存。
-- **底部提交框**：提交信息输入框 + **右对齐**的提交按钮。界面上没有 amend 勾选（宿主侧仍保留该能力）。
+- **底部提交框**：提交信息输入框 + **右对齐**的提交按钮。切走标签页、面板被重新挂载后再回来，已经写了一半的提交信息仍在（每个仓库各存各的；提交成功后清空，失败保留）。界面上没有 amend 勾选（宿主侧仍保留该能力）。
 - **行级操作**：在**左侧行号栏**按下并拖动，可选中若干行，浮出操作条（暂存 / 取消暂存 / 丢弃）——
   客户端会用被选中的行重建一个补丁片段交给宿主。在**代码文字上**拖动则完全是浏览器原生的划词选择，
   两个手势互不干扰。
@@ -143,3 +143,7 @@ pnpm typecheck   # tsc -b --pretty false
 pnpm test        # vitest run
 pnpm build       # tsc -b && tsdown
 ```
+
+**发版**：改 `package.json` 的版本 → 提交 → 打 `vX.Y.Z` tag 推上去。GitHub Actions 会跑完整门禁，
+再经 **OIDC Trusted Publishing** 发布到 npm（不需要 token、不需要 OTP），并附带 provenance 证明。
+首次使用需在 npm 的包设置里登记一次 trusted publisher（GitHub Actions / fengbinmov / dsh-git-panel / `release.yml`）。

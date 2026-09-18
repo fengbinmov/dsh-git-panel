@@ -1,0 +1,52 @@
+name: release
+
+# Tag-driven release: pushing vX.Y.Z runs the full gate and publishes that
+# version to npm through Trusted Publishing (OIDC) — no token, no OTP. The
+# package must have a trusted publisher configured for this repository file
+# (npm → package → Settings → Trusted Publisher → GitHub Actions).
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      # Trusted Publishing needs npm >= 11.5.1; stay inside the major the
+      # runner ships with instead of pinning an arbitrary exact version.
+      - name: 确保 npm 支持 OIDC 发布
+        run: npm install -g npm@^11
+
+      - name: 核对 tag 与 package.json 版本
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(node -p "require('./package.json').version")"
+          echo "tag=$tag  package.json=$pkg"
+          test "$tag" = "$pkg"
+
+      - name: 安装依赖
+        run: pnpm install --no-frozen-lockfile
+
+      - name: 门禁（类型检查 + 测试 + 构建）
+        run: pnpm typecheck && pnpm test && pnpm build
+
+      # build already produced lib/; --ignore-scripts keeps npm from running
+      # prepublishOnly a second time.
+      - name: 发布到 npm（OIDC + provenance）
+        run: npm publish --provenance --access public --ignore-scripts

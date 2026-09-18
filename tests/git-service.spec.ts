@@ -77,6 +77,11 @@ describe('GitService', () => {
     // live in the repository config.
     await git(repo, 'config', 'user.email', 'test@dsh.local')
     await git(repo, 'config', 'user.name', 'Test')
+    // Same reason for the pull policy: modern git refuses a diverged pull
+    // unless the repository (or the machine's global config) says how to
+    // reconcile, so without this the remotes test passes only on machines
+    // that happen to have pull.rebase set.
+    await git(repo, 'config', 'pull.rebase', 'false')
     await writeFile(join(repo, 'a.txt'), 'one\n')
     await git(repo, 'add', '.')
     await git(repo, 'commit', '-m', 'initial')

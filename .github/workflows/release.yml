@@ -23,10 +23,13 @@ jobs:
         with:
           run_install: false
 
+      # No registry-url on purpose: it writes an .npmrc holding
+      # `_authToken=${NODE_AUTH_TOKEN}`, and an auth token placeholder makes
+      # npm skip the OIDC exchange instead of publishing through the trusted
+      # publisher. Without it npm talks to registry.npmjs.org by default.
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-          registry-url: https://registry.npmjs.org
 
       # Trusted Publishing needs npm >= 11.5.1; stay inside the major the
       # runner ships with instead of pinning an arbitrary exact version.

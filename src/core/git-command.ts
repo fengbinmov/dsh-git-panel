@@ -213,13 +213,63 @@ export const untrackedProbeArgv = (path: string): string[] => [
 export const commitArgv = (message: string, amend: boolean): string[] =>
   amend ? ['commit', '--amend', '-m', message] : ['commit', '-m', message]
 
-/** `git log <ref> --topo-order --format=… --max-count <n> --skip <n>` — history of one ref. */
+/**
+ * `git log <ref> --branches --remotes --tags --topo-order --decorate=full
+ * --format=… --max-count <n> --skip <n>` — the repository's history.
+ *
+ * The revision set is EVERY ref, not the checked-out commit's ancestry. A graph
+ * whose input starts at HEAD cannot show a fork: when `master` and `develop` have
+ * both moved on, the branch that is not checked out contributes commits HEAD cannot
+ * reach, so its line is simply absent — a two-branch history then renders as one
+ * straight line, which is the wrong picture and the reason this is a ref LIST
+ * rather than a single rev.
+ *
+ * The list stops at branches, remotes and tags on purpose: `--all` would also pull
+ * in `refs/stash`, whose WIP commits ("WIP on …", "index on …") belong to no
+ * branch and would appear as rows with no ref chip at all.
+ *
+ * `--decorate=full` is what makes the refs parseable rather than guessed at: the
+ * `%D` field then spells `refs/heads/…`, `refs/remotes/…` and `refs/tags/…` out in
+ * full, so a local branch named `feature/x` can never be mistaken for the remote
+ * branch `x` of a remote called `feature`. `--topo-order` keeps a branch's commits
+ * together instead of interleaving them by date, which is the order a graph column
+ * is drawn in.
+ */
 export const historyArgv = (limit: number, skip: number, ref = 'HEAD'): string[] => [
-  'log', ref, '--topo-order',
+  'log', ref, '--branches', '--remotes', '--tags', '--topo-order', '--decorate=full',
   '--format=%H%x00%h%x00%P%x00%an%x00%ae%x00%at%x00%D%x00%s%x1e',
   '--max-count', String(limit),
   '--skip', String(skip),
 ]
+
+/**
+ * `git rev-list HEAD --branches --tags --not --remotes --max-count <n>` — the
+ * commits no remote-tracking ref contains, i.e. what has not been pushed anywhere
+ * yet.
+ *
+ * This is the "pending upload" marker the History list draws on a node: a commit is
+ * marked when at least one LOCAL ref (the checked-out commit, any branch, any tag)
+ * reaches it and no remote ref does. Covering every local branch is what keeps the
+ * marker right now that the list draws all of them from {@link historyArgv}: a
+ * commit on an unpushed side branch is pending even though HEAD cannot reach it,
+ * and a commit on a pushed branch stays filled. The definition needs no upstream
+ * and no per-commit spawn — the whole set comes back from one read.
+ *
+ * The positive revisions MUST come before `--not`: `--not` reverses the meaning of
+ * every rev that FOLLOWS it, so `--not --remotes HEAD` would exclude HEAD as well
+ * and answer nothing at all (measured). `--max-count` bounds a repository whose
+ * whole history is local (a fresh `git init` with thousands of commits and no
+ * remote) to one short read; the commits it drops are the OLDEST ones, which are
+ * exactly the ones that fall off the end of the page the list asked for. The count
+ * is generous rather than tied to the page size because a merge can interleave a
+ * pending commit with pushed ones in topological order.
+ */
+export const unpushedArgv = (limit: number): string[] => [
+  'rev-list', 'HEAD', '--branches', '--tags', '--not', '--remotes', '--max-count', String(limit),
+]
+
+/** How many pending-upload ids one history read asks for; see {@link unpushedArgv}. */
+export const UNPUSHED_SCAN_LIMIT = 1000
 
 /** `git show --no-patch --format=…` — one commit's metadata without its patch. */
 export const showMetaArgv = (oid: string): string[] => [

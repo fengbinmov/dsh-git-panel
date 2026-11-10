@@ -1329,16 +1329,28 @@
 
 /* --------------------------------------------------------------- commits */
 
+/* One row of the virtualized commit list. The height is FIXED because
+   useVirtualWindow derives a row's offset from `index × height` instead of
+   measuring: keep this number in sync with COMMIT_ROW_HEIGHT in HistoryPanel.tsx
+   (whose comment names this rule) and with the graph SVG's height. box-sizing
+   keeps the horizontal padding inside the 46px, overflow keeps a long subject or
+   a row of ref chips from making one row taller than the rest, and the vertical
+   padding is zero so the graph column spans the full row and its curves meet the
+   row above and below exactly. */
 .commitRow {
   display: flex;
+  align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 5px 10px;
+  height: 46px;
+  box-sizing: border-box;
+  padding: 0 10px;
   border: 0;
   background: transparent;
   color: inherit;
   font: inherit;
   text-align: left;
+  overflow: hidden;
   cursor: pointer;
 }
 
@@ -1351,17 +1363,27 @@
   box-shadow: inset 2px 0 0 var(--dsw-alias-brand-primary);
 }
 
-.commitOid {
-  flex-shrink: 0;
-  color: var(--git-ink-4);
-  font-family: var(--git-mono);
-  font-size: 11px;
-  padding-top: 1px;
+/* The commit graph, one SVG per row. flex: none because its width is the lane
+   count's (a data property, not something the row may shrink); display: block so
+   the SVG takes exactly its declared size in the flex line. The strokes are
+   painted from the palette in HistoryGraph.tsx — a lane colour is DATA and must
+   not be themed, which is why nothing here sets a colour on the drawing. */
+.commitGraph {
+  flex: none;
+  display: block;
 }
 
+/* The text column: subject over metadata, centred as a block in the fixed-height
+   row. min-width: 0 is what permits the ellipsis inside; overflow: hidden keeps
+   the two lines from spilling out of the 46px when the reader has raised the
+   shell's content font size. */
 .commitMain {
+  display: flex;
   flex: 1;
+  flex-direction: column;
+  justify-content: center;
   min-width: 0;
+  overflow: hidden;
 }
 
 .commitSubject {
@@ -1369,34 +1391,78 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  line-height: 18px;
 }
 
+/* One line, always: the row's height is fixed, so the metadata cannot wrap. A
+   commit with many refs therefore clips its chips at the row's edge — the names
+   are still one hover away (each chip has its own title) and the author/time tail
+   yields before the subject does. nowrap on the flex container is what makes the
+   overflow behave: without it the chips would fold onto a second line, grow the
+   row and desynchronise the virtual window. */
 .commitMeta {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 6px;
+  min-width: 0;
   margin-top: 2px;
+  overflow: hidden;
+  white-space: nowrap;
   color: var(--git-ink-4);
   font-size: 11px;
   line-height: 16px;
 }
 
-/* A ref chip, in the shell's own toolbar-chip material: the translucent
-   button-tool-bar fill, no border, mono at 10px because a ref name is data. */
+/* A ref chip painted with its branch's colour: --ref-color is set per row by
+   HistoryPanel from the graph's own palette, so the chip and the line beside it
+   are ONE colour — a branch's name and its line have to read as the same thing.
+   Mono at 10px because a ref name is data.
+
+   The colour is therefore not the kind signal any more; the four kinds below are
+   told apart by MATERIAL and SHAPE instead: solid (head), tinted pill with a thin
+   solid edge (local branch), tinted pill with a dashed edge (remote branch),
+   square-cornered slip (tag). That survives a reader who cannot tell two hues
+   apart, and it survives the palette repeating after eight branches. */
 .refBadge {
+  --ref-color: var(--dsw-alias-brand-primary);
+  flex: none;
+  box-sizing: border-box;
   padding: 0 5px;
+  border: 1px solid transparent;
   border-radius: 999px;
-  background: var(--dsw-alias-button-tool-bar-fill);
-  color: var(--git-ink);
+  background: color-mix(in srgb, var(--ref-color) 14%, transparent);
+  color: var(--ref-color);
   font-family: var(--git-mono);
   font-size: 10px;
   line-height: 16px;
 }
 
+/* The four kinds of ref, told apart by material and shape. refBadgeCurrent is the
+   older name for the head chip's material and is kept because other call sites may
+   still reach for it. */
+.refBadgeHead,
 .refBadgeCurrent {
-  background: var(--dsw-alias-brand-primary);
+  background: var(--ref-color);
   color: var(--dsw-alias-label-primary-foreground);
+  font-weight: 600;
+}
+
+/* A local branch: the tinted pill, edged so it reads as "on this machine". */
+.refBadgeBranch {
+  border-color: color-mix(in srgb, var(--ref-color) 38%, transparent);
+}
+
+/* A remote-tracking branch: the same pill, dashed, i.e. "on the server". */
+.refBadgeRemote {
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--ref-color) 60%, transparent);
+}
+
+/* A tag: square corners, because a tag is a point rather than a moving line. */
+.refBadgeTag {
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--ref-color) 20%, transparent);
 }
 
 /* The preview head's own chip row: which side of the index is on show, and a

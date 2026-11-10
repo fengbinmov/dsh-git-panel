@@ -218,6 +218,24 @@ export interface CommitDiff {
   after: number | null
 }
 
+/**
+ * What one decoration entry names: the checked-out commit itself, a local branch,
+ * a remote-tracking ref, or a tag.
+ *
+ * The kind exists so the History list can draw a branch chip, a remote chip and a
+ * tag chip differently. The short decoration form (`tag: v1.0.0`, `origin/main`)
+ * cannot tell a local branch named `feature/x` apart from a remote branch whose
+ * remote is called `feature`, which is why the host asks git for the FULL ref name
+ * (`--decorate=full`) and this module classifies on the `refs/…` prefix.
+ */
+export type CommitRefKind = 'head' | 'branch' | 'remote' | 'tag'
+
+/** One ref decorating a commit, with the name git shows (no `refs/…` prefix). */
+export interface CommitRef {
+  name: string
+  kind: CommitRefKind
+}
+
 /** One history row. */
 export interface HistoryCommit {
   oid: string
@@ -228,8 +246,21 @@ export interface HistoryCommit {
   authorEmail: string
   /** Unix epoch seconds. */
   authorTime: number
-  /** Decoration ref names, prefix-stripped. */
-  refs: string[]
+  /**
+   * The refs pointing at this commit, classified by kind. A checked-out branch
+   * arrives as `head` rather than `branch`, so the list can mark it as the one
+   * HEAD is on without a second lookup.
+   */
+  refs: CommitRef[]
+  /**
+   * Whether every configured remote-tracking ref already contains this commit.
+   *
+   * Optional on the wire: a host older than this field answers without it, and the
+   * list then draws every node as pushed rather than inventing a marker. A
+   * repository with no remote at all reports false for all of its commits — which
+   * is literally true, and the list can then say the whole history is local.
+   */
+  pushed?: boolean
 }
 
 /** The History panel's page of commits. */
@@ -371,13 +402,71 @@ const GIT_ERROR_CODES = new Set<GitErrorCode>([
 /** git's porcelain-v1 unmerged codes: DD, AU, UD, UA, DU, AA, UU. */
 const UNMERGED_STATUS = new Set(['DD', 'AU', 'UD', 'UA', 'DU', 'AA', 'UU'])
 
-/** Decoration → ref names: split entries, drop the `HEAD -> ` handoff prefix, drop a bare detached-`HEAD` entry, drop `tag: `. */
-export function parseDecoration(decoration: string): string[] {
+/**
+ * Decoration → classified refs.
+ *
+ * The host pins `--decorate=full`, so an entry is one of:
+ *
+ *   `HEAD -> refs/heads/main` — the checked-out branch (kind `head`)
+ *   `HEAD`                     — a detached HEAD (kind `head`)
+ *   `refs/heads/<name>`        — a local branch
+ *   `refs/remotes/<remote>/<name>` — a remote-tracking branch
+ *   `tag: refs/tags/<name>`    — a tag
+ *
+ * Anything else (`refs/stash`, `refs/notes/…`, a future ref namespace) is dropped:
+ * a commit row has room for a handful of chips, and a ref the list cannot render
+ * meaningfully would only push the useful ones out. A remote's symbolic
+ * `refs/remotes/<remote>/HEAD` is dropped too — it always decorates the same commit
+ * as the remote branch it points at, so it is a duplicate chip, not information.
+ *
+ * The short (`--decorate=short`) form is still understood for the two shapes that
+ * cannot be misread — `HEAD -> <name>`, `tag: <name>` — because that is what an
+ * older host in the same page can still send.
+ * @param decoration - the `%D` field of one `git log` record.
+ * @returns one entry per renderable ref, in git's own order.
+ */
+export function parseRefs(decoration: string): CommitRef[] {
   if (decoration === '') return []
-  return decoration.split(', ').map(part => {
-    if (part === 'HEAD') return ''
-    return part.replace(/^HEAD -> /, '').replace(/^tag: /, '').trim()
-  }).filter(name => name !== '')
+  const refs: CommitRef[] = []
+  for (const raw of decoration.split(', ')) {
+    const part = raw.trim()
+    if (part === '') continue
+    const checkedOut = /^HEAD -> (.+)$/.exec(part)
+    if (checkedOut !== null) {
+      const target = checkedOut[1] ?? ''
+      refs.push({ kind: 'head', name: stripRefPrefix(target, 'refs/heads/') })
+      continue
+    }
+    if (part === 'HEAD') {
+      refs.push({ kind: 'head', name: 'HEAD' })
+      continue
+    }
+    const tag = /^tag: (.+)$/.exec(part)
+    if (tag !== null) {
+      refs.push({ kind: 'tag', name: stripRefPrefix(tag[1] ?? '', 'refs/tags/') })
+      continue
+    }
+    if (part.startsWith('refs/heads/')) {
+      refs.push({ kind: 'branch', name: part.slice('refs/heads/'.length) })
+      continue
+    }
+    if (part.startsWith('refs/remotes/')) {
+      const name = part.slice('refs/remotes/'.length)
+      // The remote's symbolic default-branch alias decorates the same commit as
+      // the branch it resolves to.
+      if (!name.endsWith('/HEAD')) refs.push({ kind: 'remote', name })
+      continue
+    }
+    if (part.startsWith('refs/tags/')) {
+      refs.push({ kind: 'tag', name: part.slice('refs/tags/'.length) })
+    }
+  }
+  return refs
+}
+
+/** Drop a `refs/…` prefix when git used the FULL decoration form. */
+function stripRefPrefix(name: string, prefix: string): string {
+  return name.startsWith(prefix) ? name.slice(prefix.length) : name
 }
 
 /** Coarse kind for one porcelain XY pair; the staged side wins when both moved. */
@@ -817,7 +906,7 @@ export function parseHistory(stdout: string): HistoryCommit[] {
       author: author ?? '',
       authorEmail: authorEmail ?? '',
       authorTime: Number(authorTimeRaw ?? '0') || 0,
-      refs: parseDecoration(decoration ?? ''),
+      refs: parseRefs(decoration ?? ''),
     })
   }
   return commits
@@ -1062,6 +1151,15 @@ export function isCommitDiff(value: unknown): value is CommitDiff {
     && size(record.after)
 }
 
+/** Narrow an unknown value onto {@link CommitRef}. */
+export function isCommitRef(value: unknown): value is CommitRef {
+  if (typeof value !== 'object' || value === null) return false
+  const record = value as Record<string, unknown>
+  const kind = record.kind
+  return typeof record.name === 'string'
+    && (kind === 'head' || kind === 'branch' || kind === 'remote' || kind === 'tag')
+}
+
 /** Narrow an unknown value onto {@link HistoryCommit}. */
 export function isHistoryCommit(value: unknown): value is HistoryCommit {
   if (typeof value !== 'object' || value === null) return false
@@ -1073,7 +1171,9 @@ export function isHistoryCommit(value: unknown): value is HistoryCommit {
     && typeof record.author === 'string'
     && typeof record.authorEmail === 'string'
     && typeof record.authorTime === 'number'
-    && Array.isArray(record.refs) && record.refs.every(ref => typeof ref === 'string')
+    && Array.isArray(record.refs) && record.refs.every(isCommitRef)
+    // `pushed` is optional: a host older than the field answers without it.
+    && (record.pushed === undefined || typeof record.pushed === 'boolean')
 }
 
 /** Narrow an unknown value onto {@link HistoryView}. */

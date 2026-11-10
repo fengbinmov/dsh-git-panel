@@ -32,7 +32,8 @@ import {
   rebaseArgv, remoteListArgv, rmCachedArgv, showMetaArgv, showPatchArgv, showPathPatchArgv, showRawStatusArgv,
   showStatArgv,
   statusFilesArgv, statusV2Argv, switchArgv, topLevelArgv,
-  unstageArgv, untrackedDiffArgv, untrackedProbeArgv, upstreamArgv, validateBranchName,
+  unstageArgv, untrackedDiffArgv, untrackedProbeArgv, unpushedArgv, UNPUSHED_SCAN_LIMIT,
+  upstreamArgv, validateBranchName,
   verifyHeadArgv, verifyRefArgv,
 } from '../core/git-command.ts'
 import {
@@ -640,25 +641,48 @@ export class GitService {
   }
 
   /**
-   * A page of the current branch's history, newest first. `hasMore` comes from
-   * requesting one row past the page size.
+   * A page of the REPOSITORY's history, newest first: every branch (local and
+   * remote) and tag, not just the checked-out commit's ancestry. `hasMore` comes
+   * from requesting one row past the page size.
+   *
+   * Covering every ref is what makes the History tab's graph a graph rather than a
+   * line: a branch that is not checked out has commits HEAD cannot reach, and
+   * omitting them hid the fork entirely (see {@link historyArgv}).
+   *
+   * Each row also says whether any remote already has its commit — the History
+   * list draws a pending node hollow. That answer is one extra read on the same
+   * wave (`rev-list HEAD --branches --tags --not --remotes`, see
+   * {@link unpushedArgv}) rather than a per-commit probe: the whole page's set comes
+   * back at once. It is a plain `Set` because the layout asks "is this oid in it"
+   * once per row, and it is deliberately independent of the upstream: a branch that
+   * tracks nothing, or a detached HEAD, still gets a truthful answer.
+   *
+   * An unavailable answer (a git that rejects the read) leaves the set empty, and
+   * every row then reads as pushed — the same thing the marker does when it knows
+   * nothing. Screaming "not pushed" at a whole history on a read failure would be
+   * worse than saying nothing.
    */
   async history(path: string, limit = 50, skip = 0): Promise<HistoryView | null> {
     const gated = await this.gate(path)
     if (!gated.ok) return null
     const root = await this.repoRoot(gated.canonical)
     if (root === null) return null
-    const [logResult, branchResult] = await Promise.all([
+    const [logResult, branchResult, unpushedResult] = await Promise.all([
       this.runner.run(historyArgv(limit + 1, skip), root),
       this.runner.run(headBranchArgv(), root),
+      this.runner.run(unpushedArgv(UNPUSHED_SCAN_LIMIT), root),
     ])
     const commits = parseHistory(logResult.stdout)
     const hasMore = commits.length > limit
     const rawBranch = branchResult.stdout.trim()
+    const page = hasMore ? commits.slice(0, limit) : commits
+    const unpushed = unpushedResult.exitCode === 0
+      ? new Set(unpushedResult.stdout.split('\n').map(line => line.trim()).filter(line => line !== ''))
+      : new Set<string>()
     return {
       root,
       branch: rawBranch === DETACHED ? '' : rawBranch,
-      commits: hasMore ? commits.slice(0, limit) : commits,
+      commits: page.map(commit => ({ ...commit, pushed: !unpushed.has(commit.oid) })),
       hasMore,
     }
   }

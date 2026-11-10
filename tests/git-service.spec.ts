@@ -516,6 +516,67 @@ describe('GitService', () => {
       expect(await service.commitDetail(repo, '')).toBeNull()
     })
 
+    it('classifies decorations and marks a commit no remote contains as pending', async () => {
+      await git(repo, 'tag', 'v1')
+      await git(repo, 'branch', 'feature/x')
+      const view = await service.history(repo, 10, 0)
+      const head = view?.commits[0]
+      // `HEAD ->` first, then the tag, then the other local branch — git's own order.
+      expect(head?.refs).toEqual([
+        { kind: 'head', name: 'main' },
+        { kind: 'tag', name: 'v1' },
+        { kind: 'branch', name: 'feature/x' },
+      ])
+      // This fixture has no remote, so nothing has been pushed anywhere: every row
+      // says so. That is the marker's whole job — and a repository with no remote
+      // must not answer "all pushed" just because there is nothing to compare.
+      expect(view?.commits.every(commit => commit.pushed === false)).toBe(true)
+    })
+
+    it('clears the pending mark once a remote-tracking ref contains the commit', async () => {
+      const bare = join(root, 'origin.git')
+      expect((await git(root, 'init', '--bare', '-b', 'main', bare)).exitCode).toBe(0)
+      expect((await git(repo, 'remote', 'add', 'origin', bare)).exitCode).toBe(0)
+      expect((await service.push(repo)).ok).toBe(true)
+      // One more commit, deliberately not pushed: the two rows must disagree.
+      await writeFile(join(repo, 'a.txt'), 'two\n')
+      expect((await service.stage(repo, ['a.txt'])).ok).toBe(true)
+      expect((await service.commit(repo, 'local only')).ok).toBe(true)
+
+      const view = await service.history(repo, 10, 0)
+      const bySubject = new Map((view?.commits ?? []).map(commit => [commit.subject, commit]))
+      expect(bySubject.get('local only')?.pushed).toBe(false)
+      expect(bySubject.get('initial')?.pushed).toBe(true)
+      // The pushed commit additionally carries the remote chip the list draws.
+      expect(bySubject.get('initial')?.refs).toContainEqual({ kind: 'remote', name: 'origin/main' })
+    })
+
+    it('reads every branch, so a fork keeps the tip HEAD cannot reach', async () => {
+      // The reported bug: `main` and `develop` both move on after the first
+      // commit. A page taken from HEAD alone showed one straight line — the
+      // branch that is not checked out contributes commits HEAD cannot reach, so
+      // the History graph had no fork to draw.
+      expect((await git(repo, 'switch', '-q', '-c', 'develop')).exitCode).toBe(0)
+      await writeFile(join(repo, 'dev.txt'), 'd\n')
+      await git(repo, 'add', '.')
+      expect((await git(repo, 'commit', '-m', 'develop only')).exitCode).toBe(0)
+      expect((await git(repo, 'switch', '-q', 'main')).exitCode).toBe(0)
+      await writeFile(join(repo, 'main.txt'), 'm\n')
+      await git(repo, 'add', '.')
+      expect((await git(repo, 'commit', '-m', 'main only')).exitCode).toBe(0)
+      expect((await git(repo, 'switch', '-q', 'develop')).exitCode).toBe(0)
+
+      const view = await service.history(repo, 10, 0)
+      expect(view?.branch).toBe('develop')
+      const subjects = (view?.commits ?? []).map(commit => commit.subject)
+      expect(subjects).toEqual(expect.arrayContaining(['develop only', 'main only', 'initial']))
+      // The tip HEAD is not on arrives with its own branch chip, and both tips are
+      // local-only, so both read as pending (the marker covers every local ref).
+      const mainTip = (view?.commits ?? []).find(commit => commit.subject === 'main only')
+      expect(mainTip?.refs).toContainEqual({ kind: 'branch', name: 'main' })
+      expect(mainTip?.pushed).toBe(false)
+    })
+
     it('reads one commit file on its own, which is what the cap cannot cut', async () => {
       // The per-file route exists because the commit-wide patch is capped. Both
       // files of this commit are touched, and each reads whole on its own.

@@ -6,8 +6,10 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
-  isBinaryPatch, isCommitDiff, isCommitFileStat, isStatusFilesView, operationNameFromMarkers,
-  parseAheadBehind, parseBranches, parseHistory, parseNumstat, parseRawStatus, parseRemotes, parseShowMeta,
+  isBinaryPatch, isCommitDiff, isCommitFileStat, isCommitRef, isHistoryCommit, isStatusFilesView,
+  operationNameFromMarkers,
+  parseAheadBehind, parseBranches, parseHistory, parseNumstat, parseRawStatus, parseRefs, parseRemotes,
+  parseShowMeta,
   parseStatPatch, parseStatusV2, parseTreeSize,
   predictCommitted, predictDiscarded, predictLineSelection, predictStaged, withLineStats,
   type FileChange, type StatusFilesView,
@@ -346,17 +348,79 @@ describe('parseBranches', () => {
   })
 })
 
+describe('parseRefs', () => {
+  it('classifies the FULL decoration form by ref prefix', () => {
+    expect(parseRefs('HEAD -> refs/heads/main, refs/remotes/origin/main, refs/remotes/origin/HEAD, tag: refs/tags/v1')).toEqual([
+      { kind: 'head', name: 'main' },
+      { kind: 'remote', name: 'origin/main' },
+      { kind: 'tag', name: 'v1' },
+    ])
+  })
+
+  it('keeps a local branch named like a remote apart from the remote itself', () => {
+    // The short form cannot tell `feature/x` (a local branch) from `x` on a remote
+    // called `feature`; the full form can, which is why the host asks for it.
+    expect(parseRefs('refs/heads/feature/x, refs/remotes/feature/x')).toEqual([
+      { kind: 'branch', name: 'feature/x' },
+      { kind: 'remote', name: 'feature/x' },
+    ])
+  })
+
+  it('reads a detached HEAD and still understands the short form', () => {
+    expect(parseRefs('HEAD')).toEqual([{ kind: 'head', name: 'HEAD' }])
+    expect(parseRefs('HEAD -> main, tag: v0.1.1')).toEqual([
+      { kind: 'head', name: 'main' },
+      { kind: 'tag', name: 'v0.1.1' },
+    ])
+  })
+
+  it('drops refs the History list cannot render, and an empty decoration', () => {
+    expect(parseRefs('refs/stash')).toEqual([])
+    expect(parseRefs('')).toEqual([])
+  })
+})
+
+describe('isCommitRef', () => {
+  it('accepts the four kinds and rejects anything else', () => {
+    expect(isCommitRef({ kind: 'tag', name: 'v1' })).toBe(true)
+    expect(isCommitRef({ kind: 'other', name: 'v1' })).toBe(false)
+    expect(isCommitRef({ kind: 'tag' })).toBe(false)
+    expect(isCommitRef(null)).toBe(false)
+  })
+})
+
 describe('parseHistory', () => {
   it('strips the leading newline tformat leaves and decodes decorations', () => {
-    const first = `o1${NUL}s1${NUL}p1 p2${NUL}Ann${NUL}a@x${NUL}1700000000${NUL}HEAD -> main, tag: v1${NUL}first subject`
+    const first = `o1${NUL}s1${NUL}p1 p2${NUL}Ann${NUL}a@x${NUL}1700000000${NUL}HEAD -> refs/heads/main, tag: refs/tags/v1${NUL}first subject`
     const second = `o2${NUL}s2${NUL}${NUL}Bob${NUL}b@x${NUL}1699999999${NUL}${NUL}second subject`
     const commits = parseHistory(`${first}\u001e\n${second}\u001e\n`)
     expect(commits).toHaveLength(2)
     expect(commits[0]).toMatchObject({
       oid: 'o1', shortOid: 's1', parents: ['p1', 'p2'], author: 'Ann', authorEmail: 'a@x',
-      authorTime: 1700000000, refs: ['main', 'v1'], subject: 'first subject',
+      authorTime: 1700000000,
+      refs: [{ kind: 'head', name: 'main' }, { kind: 'tag', name: 'v1' }],
+      subject: 'first subject',
     })
     expect(commits[1]).toMatchObject({ parents: [], refs: [], subject: 'second subject' })
+  })
+})
+
+describe('isHistoryCommit', () => {
+  const row = (over: Record<string, unknown> = {}): unknown => ({
+    oid: 'o1', shortOid: 's1', parents: [], subject: 's', author: 'A', authorEmail: 'a@x',
+    authorTime: 1, refs: [], ...over,
+  })
+
+  it('accepts a row whose refs are classified, with `pushed` either way', () => {
+    expect(isHistoryCommit(row())).toBe(true)
+    expect(isHistoryCommit(row({ pushed: false }))).toBe(true)
+    expect(isHistoryCommit(row({ refs: [{ kind: 'branch', name: 'main' }] }))).toBe(true)
+  })
+
+  it('rejects the old string refs and a non-boolean `pushed`', () => {
+    expect(isHistoryCommit(row({ refs: ['main'] }))).toBe(false)
+    expect(isHistoryCommit(row({ refs: [{ kind: 'nope', name: 'main' }] }))).toBe(false)
+    expect(isHistoryCommit(row({ pushed: 'no' }))).toBe(false)
   })
 })
 

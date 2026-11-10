@@ -73,7 +73,11 @@ export class GitApi {
     return post('/gitpanel/unstage', { path, paths })
   }
 
-  /** Discard the given paths back to HEAD (destructive; the host buckets untracked paths itself). */
+  /**
+   * Discard the WORKTREE changes the given paths carry, leaving the index alone
+   * (destructive; the host buckets untracked and unmerged paths itself). A path
+   * staged and then edited again keeps its staged row.
+   */
   discard(path: string, paths: readonly string[]): Promise<ApiResult<{ summary: string }>> {
     return post('/gitpanel/discard', { path, paths })
   }

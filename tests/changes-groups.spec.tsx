@@ -166,6 +166,17 @@ describe('Delete acts on the region the row is in', () => {
     expect(discarded).toEqual([])
   })
 
+  it('discards only the pending half of a path that is staged too', () => {
+    // The reported flow: a new file staged, edited again, then Delete pressed on
+    // its PENDING row. Only the worktree half leaves the pending region; the
+    // staged row must survive (the host used to restore BOTH sides to HEAD,
+    // which deleted the staged content as well).
+    const { rows, discarded, unstagedCalls } = mountWith([addedThenEdited('新建文本文档.txt')])
+    fireEvent.keyDown(rows[0], { key: 'Delete' })
+    expect(discarded).toEqual([['新建文本文档.txt']])
+    expect(unstagedCalls).toEqual([])
+  })
+
   it('renders no per-row buttons at all', () => {
     const { rows } = mountWith([unstaged('a.ts'), staged('b.ts')])
     expect(rows.every(row => row.querySelector('button') === null)).toBe(true)

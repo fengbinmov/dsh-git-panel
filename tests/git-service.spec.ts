@@ -313,12 +313,32 @@ describe('GitService', () => {
       expect((await service.statusFiles(repo))?.files).toHaveLength(0)
     })
 
-    it('reverts a staged addition on both sides', async () => {
-      await writeFile(join(repo, 'new.txt'), 'n\n')
+    it('keeps a staged addition while discarding its further worktree edits', async () => {
+      await writeFile(join(repo, 'new.txt'), 'staged\n')
       await service.stage(repo, ['new.txt'])
+      // 'AM': the index holds the file, the worktree added a line on top of it.
+      await writeFile(join(repo, 'new.txt'), 'staged\nunstaged\n')
+
       expect((await service.discard(repo, ['new.txt'])).ok).toBe(true)
-      await expect(readFile(join(repo, 'new.txt'), 'utf8')).rejects.toThrow()
-      expect((await service.statusFiles(repo))?.files).toHaveLength(0)
+      // Only the worktree side is taken back; the staged row has to survive.
+      expect(await readText(join(repo, 'new.txt'))).toBe('staged\n')
+      const view = await service.statusFiles(repo)
+      expect(view?.files).toMatchObject([{ path: 'new.txt', index: 'A', worktree: ' ', staged: true }])
+      expect(view?.stagedCount).toBe(1)
+      expect(view?.unstagedCount).toBe(0)
+    })
+
+    it('reports nothing-to-discard for a staged path whose worktree never moved', async () => {
+      await writeFile(join(repo, 'new.txt'), 'staged\n')
+      await service.stage(repo, ['new.txt'])
+
+      // There is no pending change to take back, and the staged half must not be
+      // touched — the request is a no-op rather than a hidden unstage.
+      expect(await service.discard(repo, ['new.txt'])).toMatchObject({
+        ok: false, error: { code: 'nothing-to-discard' },
+      })
+      expect(await readText(join(repo, 'new.txt'))).toBe('staged\n')
+      expect((await service.statusFiles(repo))?.files).toMatchObject([{ path: 'new.txt', staged: true }])
     })
 
     it('restores a deleted tracked file', async () => {

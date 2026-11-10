@@ -7,7 +7,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   addArgv, classifySwitchFailure, cleanArgv, commitArgv, diffStatPatchArgv, discardRestoreArgv,
-  extractBlockedPaths,
+  discardWorktreeArgv, extractBlockedPaths,
   isSafeRepoPath, rmCachedArgv, showPatchArgv, showPathPatchArgv, showStatArgv, statusFilesArgv, statusV2Argv,
   switchArgv, unstageArgv,
   untrackedDiffArgv, validateBranchName,
@@ -45,11 +45,23 @@ describe('argv builders', () => {
       rmCachedArgv(['-weird.txt']),
       cleanArgv(['-weird.txt']),
       discardRestoreArgv(['-weird.txt']),
+      discardWorktreeArgv(['-weird.txt']),
     ]) {
       const separator = argv.indexOf('--')
       expect(separator).toBeGreaterThan(-1)
       expect(argv.indexOf('-weird.txt')).toBe(separator + 1)
     }
+  })
+
+  it('discards a pending row out of the WORKTREE only', () => {
+    // Without --staged the restore source is the index, so the index keeps its
+    // entries. Restoring both sides would drop a staged addition and delete it.
+    expect(discardWorktreeArgv(['a.txt'])).toEqual(['restore', '--worktree', '--', 'a.txt'])
+    expect(discardWorktreeArgv(['a.txt'])).not.toContain('--staged')
+  })
+
+  it('keeps the both-sides restore for unmerged paths', () => {
+    expect(discardRestoreArgv(['a.txt'])).toEqual(['restore', '--staged', '--worktree', '--', 'a.txt'])
   })
 
   it('forces -z on the file-level status read', () => {

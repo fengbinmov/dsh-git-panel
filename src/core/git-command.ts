@@ -117,17 +117,43 @@ export const rmCachedArgv = (paths: readonly string[]): string[] => ['rm', '-q',
 export const cleanArgv = (paths: readonly string[]): string[] => ['clean', '-q', '-f', '-d', '--', ...paths]
 
 /**
+ * `git restore --worktree -- <paths>` — put the WORKTREE back to the index
+ * version, leaving the index itself untouched (destructive to the worktree).
+ *
+ * This is what "discard this unstaged change" means: the row sits on the
+ * pending side, so only the worktree half of it is being taken back. For an
+ * `AM` path (a staged addition that was edited again afterwards) the file
+ * returns to the content that is still staged, and the staged row survives —
+ * `--staged` must NOT be passed here, because restoring both sides to HEAD
+ * would drop that staged entry and delete the file, taking the user's other
+ * half of the change with it.
+ *
+ * The source is the index when `--staged` is absent, so no resolvable HEAD is
+ * needed: an unborn branch works too. Two path classes stay out of this call:
+ * untracked paths (they are in no index; use {@link cleanArgv}) and unmerged
+ * paths (git rejects the whole invocation with "path ... is unmerged"; use
+ * {@link discardRestoreArgv}).
+ */
+export const discardWorktreeArgv = (paths: readonly string[]): string[] =>
+  ['restore', '--worktree', '--', ...paths]
+
+/**
  * `git restore --staged --worktree -- <paths>` — revert the given paths to
  * HEAD on BOTH sides (destructive).
  *
  * `--staged --worktree` together is the point, not redundancy: one call drops
  * a staged addition (removing the file from disk as well as the index),
- * reverts a staged modification, and restores a deleted file. `--worktree`
- * alone would leave everything staged. The command is rejected ATOMICALLY when
- * any pathspec is unknown — one untracked path aborts the whole thing and
- * leaves every other path untouched — so callers must route untracked paths to
- * {@link cleanArgv}. It also requires a resolvable HEAD; on an unborn branch it
- * fails with "could not resolve HEAD" and callers use {@link rmCachedArgv}.
+ * reverts a staged modification, and restores a deleted file. It is therefore
+ * the conflict-resolution form: an unmerged path cannot be restored from the
+ * index (there is no stage-0 entry), and HEAD's version is the useful reading
+ * of "discard" while a merge is stopped. Whole-file discards of ORDINARY
+ * pending rows must use {@link discardWorktreeArgv} instead.
+ *
+ * The command is rejected ATOMICALLY when any pathspec is unknown — one
+ * untracked path aborts the whole thing and leaves every other path untouched
+ * — so callers must route untracked paths to {@link cleanArgv}. It also
+ * requires a resolvable HEAD; on an unborn branch it fails with "could not
+ * resolve HEAD" and callers use {@link rmCachedArgv}.
  */
 export const discardRestoreArgv = (paths: readonly string[]): string[] =>
   ['restore', '--staged', '--worktree', '--', ...paths]

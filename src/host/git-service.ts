@@ -23,7 +23,8 @@ import type {} from '@deepseek-ai/dsh-subprocess'
 import { subprocessRunner as sharedSubprocessRunner, type GitRunner } from './git-runner.ts'
 import {
   absoluteGitDirArgv, addArgv, aheadBehindArgv, applyPatchArgv, checkRefFormatArgv, classifySwitchFailure,
-  cleanArgv, commitArgv, diffPathArgv, diffQuietArgv, diffStatPatchArgv, discardRestoreArgv, fetchArgv,
+  cleanArgv, commitArgv, diffPathArgv, diffQuietArgv, diffStatPatchArgv, discardRestoreArgv,
+  discardWorktreeArgv, fetchArgv,
   forEachRefArgv,
   headBranchArgv, headShortArgv, historyArgv, isSafeRepoPath, mergeAbortArgv,
   mergeArgv, OPERATION_MARKERS, pullArgv, pushArgv, rebaseAbortArgv,
@@ -826,17 +827,26 @@ export class GitService {
   }
 
   /**
-   * Discard everything the given paths carry, back to HEAD: unstage them and
-   * restore tracked content, then delete the untracked ones.
+   * Discard the WORKTREE changes the given paths carry, leaving the index alone:
+   * tracked paths go back to their staged version, and untracked ones are
+   * deleted.
    *
-   * The two buckets cannot share one invocation. `git restore` rejects a
-   * pathspec it does not know and does so ATOMICALLY — one untracked path
-   * aborts the whole command and leaves every other path untouched — so
-   * untracked paths are routed to `git clean` instead. On a conflicted path the
-   * restore resolves the conflict to HEAD's version, which is the useful
-   * reading of "discard" while a merge is stopped. Destructive and irreversible
-   * for untracked files (`git clean` keeps no reflog), which is why the client
-   * gates it behind its own confirmation.
+   * The Changes panel's Delete key on a pending row means exactly this: the row
+   * stands for the worktree half of a path, so taking it out must not touch the
+   * index. An `AM` path (a staged addition edited again afterwards) is what makes
+   * the distinction visible: restoring BOTH sides to HEAD drops the staged entry
+   * and deletes the file, so the half the user had already staged disappeared
+   * from the staged region — the bug this routing fixes. Only the conflict path
+   * still goes to HEAD on both sides, because an unmerged path has no stage-0
+   * entry to restore from, and HEAD's version is the useful reading of
+   * "discard" while a merge is stopped.
+   *
+   * The buckets cannot share one invocation. `git restore` rejects a pathspec it
+   * does not know and does so ATOMICALLY — one untracked path aborts the whole
+   * command and leaves every other path untouched — so untracked paths are
+   * routed to `git clean` instead, and unmerged paths to their own restore.
+   * Destructive and irreversible for untracked files (`git clean` keeps no
+   * reflog), which is why the client gates it behind its own confirmation.
    */
   async discard(path: string, paths: readonly string[]): Promise<MutationResult> {
     const unsafe = this.validatePaths(paths)
@@ -848,30 +858,50 @@ export class GitService {
     // path's bucket can change between the list render and the click.
     const status = await this.runner.run(statusV2Argv(), root)
     const byPath = new Map(parseStatusV2(status.stdout).files.map(file => [file.path, file]))
+    /** Tracked, non-conflicted paths: back to the index version. */
     const restore: string[] = []
+    /** Unmerged paths: back to HEAD on both sides. */
+    const resolve: string[] = []
+    /** Untracked paths: deleted outright. */
     const clean: string[] = []
     for (const candidate of paths) {
       const change = byPath.get(candidate)
       // A path git no longer reports has nothing left to discard.
       if (change === undefined) continue
-      if (change.untracked) clean.push(candidate)
-      else restore.push(candidate)
+      if (change.untracked) { clean.push(candidate); continue }
+      if (change.conflicted) { resolve.push(candidate); continue }
+      // An index-only path (a staged addition whose worktree never moved) holds
+      // no pending change, so discarding it would be a silent no-op — or, with
+      // `--staged`, would delete the staged half. It is not counted, and a
+      // request holding only such paths reports nothing-to-discard.
+      if (change.worktree === ' ' || change.worktree === '?') continue
+      restore.push(candidate)
     }
-    if (restore.length === 0 && clean.length === 0) return { ok: false, error: NOTHING_TO_DISCARD }
+    if (restore.length === 0 && resolve.length === 0 && clean.length === 0) {
+      return { ok: false, error: NOTHING_TO_DISCARD }
+    }
     if (restore.length > 0) {
+      // `--worktree` only: the index keeps whatever it holds, which is what
+      // leaves the staged row of a path staged AND edited again untouched.
+      const restored = await this.runner.run(discardWorktreeArgv(restore), root)
+      if (restored.exitCode !== 0) {
+        return { ok: false, error: { code: 'internal', message: restored.stderr.trim() || 'git restore failed' } }
+      }
+    }
+    if (resolve.length > 0) {
       if (await this.hasHead(root)) {
-        const restored = await this.runner.run(discardRestoreArgv(restore), root)
-        if (restored.exitCode !== 0) {
-          return { ok: false, error: { code: 'internal', message: restored.stderr.trim() || 'git restore failed' } }
+        const resolved = await this.runner.run(discardRestoreArgv(resolve), root)
+        if (resolved.exitCode !== 0) {
+          return { ok: false, error: { code: 'internal', message: resolved.stderr.trim() || 'git restore failed' } }
         }
       } else {
-        // Unborn branch: nothing is committed to restore from, so discarding
-        // means dropping the staged entries and then removing the files.
-        const dropped = await this.runner.run(rmCachedArgv(restore), root)
+        // Unborn branch: nothing is committed to resolve against, so discarding
+        // means dropping the index entries and then removing the files.
+        const dropped = await this.runner.run(rmCachedArgv(resolve), root)
         if (dropped.exitCode !== 0) {
           return { ok: false, error: { code: 'internal', message: dropped.stderr.trim() || 'git rm --cached failed' } }
         }
-        clean.push(...restore)
+        clean.push(...resolve)
       }
     }
     if (clean.length > 0) {
@@ -880,7 +910,7 @@ export class GitService {
         return { ok: false, error: { code: 'internal', message: cleaned.stderr.trim() || 'git clean failed' } }
       }
     }
-    return { ok: true, summary: `discarded ${restore.length + clean.length} path(s)` }
+    return { ok: true, summary: `discarded ${restore.length + resolve.length + clean.length} path(s)` }
   }
 
   /**

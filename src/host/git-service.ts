@@ -29,16 +29,19 @@ import {
   headBranchArgv, headShortArgv, historyArgv, isSafeRepoPath, mergeAbortArgv,
   mergeArgv, OPERATION_MARKERS, pullArgv, pushArgv, rebaseAbortArgv,
   lsTreeSizeArgv,
-  rebaseArgv, remoteListArgv, rmCachedArgv, showMetaArgv, showPatchArgv, showPathPatchArgv, showStatArgv,
+  rebaseArgv, remoteListArgv, rmCachedArgv, showMetaArgv, showPatchArgv, showPathPatchArgv, showRawStatusArgv,
+  showStatArgv,
   statusFilesArgv, statusV2Argv, switchArgv, topLevelArgv,
   unstageArgv, untrackedDiffArgv, untrackedProbeArgv, upstreamArgv, validateBranchName,
   verifyHeadArgv, verifyRefArgv,
 } from '../core/git-command.ts'
 import {
   isBinaryPatch, operationNameFromMarkers, parseAheadBehind, parseBranches, parseHistory,
-  parseNumstat, parseRemotes, parseShowMeta, parseStatPatch, parseStatusV2, parseTreeSize, selectionFragmentError,
+  parseNumstat, parseRawStatus, parseRemotes, parseShowMeta, parseStatPatch, parseStatusV2, parseTreeSize,
+  selectionFragmentError,
   withLineStats,
-  type BranchesView, type CommitDetail, type CommitDiff, type CommitOutcome, type DiffView, type GitError,
+  type BranchesView, type CommitDetail, type CommitDiff, type CommitFileStat, type CommitFileStatus,
+  type CommitOutcome, type DiffView, type GitError,
   type HistoryView, type MutationResult, type RemoteRow, type RemoteView, type RepoProbe,
   type StatusFilesView, type SwitchResult,
 } from '../core/types.ts'
@@ -113,6 +116,61 @@ const NOTHING_TO_DISCARD: GitError = {
 const PATCH_CAP_CHARS = 400_000
 
 /**
+ * How many commit details one service instance remembers.
+ *
+ * A commit is immutable — its oid names its exact content — so remembering it can
+ * never be stale the way a working-tree read can; the memo is about cost, not
+ * correctness. The detail can be megabytes of patch, and both the SSE change
+ * stream's periodic refresh (about every 30s) and a re-opened History tab re-read
+ * the selected commit over and over. The bound keeps a long browsing session's
+ * footprint flat while still covering "the commit I am reading plus the handful I
+ * just looked at".
+ */
+const COMMIT_DETAIL_CACHE_LIMIT = 8
+
+/**
+ * How long one remembered commit detail is trusted.
+ *
+ * A commit's content never changes, so the TTL is not a staleness bound the way
+ * {@link ROOT_TTL_MS} is; it bounds how long one browsing session keeps holding
+ * that text, in the same "remember briefly" spirit as the other memos here.
+ */
+const COMMIT_DETAIL_TTL_MS = 300_000
+
+/**
+ * Changed-file / changed-line limits above which {@link GitService.commitDetail}
+ * abandons the commit-wide patch and answers from metadata alone.
+ *
+ * Measured on this machine for a 12_593-file commit: `show --numstat` 84ms/478KB,
+ * `show --raw -z` 123ms/843KB, `show --patch` 242ms/3.4MB. The patch is the only
+ * one of the three whose cost grows with CONTENT, and it is not what the panel
+ * needs first — the file list is, and that is `--numstat`. On a user repository of
+ * that size with a Windows real-time scanner in the subprocess path those numbers
+ * become seconds, and they used to sit directly on click-to-file-list. These
+ * limits keep ordinary commits on the full-patch path and take only the
+ * pathological ones out of it; the per-file `commitDiff` route still offers the
+ * actual text for any one file.
+ */
+export const COMMIT_DETAIL_MAX_FILES = 2_000
+export const COMMIT_DETAIL_MAX_CHANGED_LINES = 200_000
+
+/**
+ * Whether one commit is large enough to skip its commit-wide patch.
+ * @param files - the commit's `--numstat` rows.
+ */
+export function shouldSkipCommitPatch(files: readonly CommitFileStat[]): boolean {
+  if (files.length > COMMIT_DETAIL_MAX_FILES) return true
+  let changedLines = 0
+  for (const file of files) {
+    changedLines += file.additions + file.deletions
+    // Early exit: the pathological case is exactly the one where summing every
+    // row would itself be a walk worth avoiding.
+    if (changedLines > COMMIT_DETAIL_MAX_CHANGED_LINES) return true
+  }
+  return false
+}
+
+/**
  * How long a resolved repository root is trusted without asking git again.
  *
  * One `git rev-parse --show-toplevel` spawn is ~56ms on this machine (measured),
@@ -159,6 +217,17 @@ export class GitService {
    * without a second round trip when the tab is opened.
    */
   private readonly remotes = new Map<string, { at: number; rows: RemoteRow[] }>()
+
+  /**
+   * Commit details, keyed `root + NUL + oid`, young-end-first.
+   *
+   * The key needs the root because two workspaces can legitimately hold the same
+   * oid, and it needs the NUL because a path could otherwise be chosen to make two
+   * different (root, oid) pairs collide. The cached object is returned as-is: every
+   * caller serializes it, and copying a multi-megabyte patch on every hit would
+   * undo the point of the memo. See {@link COMMIT_DETAIL_CACHE_LIMIT}.
+   */
+  private readonly commitDetails = new Map<string, { at: number; detail: CommitDetail }>()
 
   /**
    * @param runner - the spawn seam.
@@ -265,6 +334,35 @@ export class GitService {
     const rows = result.exitCode === 0 ? parseRemotes(result.stdout) : []
     if (signal?.aborted !== true) this.remotes.set(root, { at: Date.now(), rows })
     return rows
+  }
+
+  /**
+   * The remembered detail for one cache key, young-end-first, or null on a miss.
+   * Expired entries are dropped rather than returned: a TTL hit must cost no
+   * spawn, so the check cannot depend on asking git whether anything changed.
+   */
+  private rememberedDetail(key: string): CommitDetail | null {
+    const remembered = this.commitDetails.get(key)
+    if (remembered === undefined) return null
+    if (Date.now() - remembered.at >= COMMIT_DETAIL_TTL_MS) {
+      this.commitDetails.delete(key)
+      return null
+    }
+    // A hit is a use, so it moves to the young end of the Map's insertion order —
+    // that order IS the LRU list, which is why this needs no second structure.
+    this.commitDetails.delete(key)
+    this.commitDetails.set(key, remembered)
+    return remembered.detail
+  }
+
+  /** Remember one completed detail and evict the least recently used past the cap. */
+  private rememberDetail(key: string, detail: CommitDetail): void {
+    this.commitDetails.delete(key)
+    this.commitDetails.set(key, { at: Date.now(), detail })
+    for (const oldest of this.commitDetails.keys()) {
+      if (this.commitDetails.size <= COMMIT_DETAIL_CACHE_LIMIT) break
+      this.commitDetails.delete(oldest)
+    }
   }
 
   /** The branch's tracking ref, or '' when it has none (`rev-parse` exits non-zero). */
@@ -569,6 +667,17 @@ export class GitService {
    * One commit's metadata, changed-file statistics, and patch (`git show`).
    * The oid is validated as a hex object id before it reaches argv, so a
    * crafted value can never be parsed as a git option.
+   *
+   * The patch is the expensive read, and it is started TOGETHER with the two cheap
+   * ones so an ordinary commit still answers from one overlapping wave. It runs
+   * under an internal controller because a commit touching thousands of files
+   * generates megabytes of text the panel does not need in order to list those
+   * files: when the numstat rows say the commit is pathological the spawn is
+   * cancelled IN FLIGHT, and one cheap `--raw` read supplies the file kinds the
+   * patch would otherwise have been the source of.
+   *
+   * Results are remembered (see {@link COMMIT_DETAIL_CACHE_LIMIT}); a hit costs no
+   * spawn at all.
    */
   async commitDetail(path: string, oid: string, signal?: AbortSignal): Promise<CommitDetail | null> {
     if (!/^[0-9a-fA-F]{4,64}$/.test(oid)) return null
@@ -576,21 +685,74 @@ export class GitService {
     if (!gated.ok) return null
     const root = await this.repoRoot(gated.canonical, signal)
     if (root === null) return null
-    const [metaResult, statResult, patchResult] = await Promise.all([
+    const cacheKey = `${root}\u0000${oid}`
+    const remembered = this.rememberedDetail(cacheKey)
+    if (remembered !== null) return remembered
+
+    // `AbortSignal.any` is what keeps the caller's cancellation semantics intact:
+    // an abort from either side kills the patch spawn, and the caller's signal
+    // still governs the other reads unchanged. When the caller passed no signal,
+    // the controller's is the only one and can be used as-is.
+    const patchController = new AbortController()
+    const patchSignal = signal === undefined ? patchController.signal : AbortSignal.any([signal, patchController.signal])
+    // A rejected patch read is expected here — the fast path cancels it on purpose,
+    // and a cancelled caller rejects the other two reads below with the same error —
+    // so it must not surface as an unhandled rejection. This method waits on the
+    // other two reads instead.
+    const patchRead = this.runner.run(showPatchArgv(oid), root, patchSignal).then(
+      result => result,
+      () => null,
+    )
+    const [metaResult, statResult] = await Promise.all([
       this.runner.run(showMetaArgv(oid), root, signal),
       this.runner.run(showStatArgv(oid), root, signal),
-      this.runner.run(showPatchArgv(oid), root, signal),
     ])
     const meta = parseShowMeta(metaResult.stdout)
-    if (meta === null) return null
-    const patch = patchResult.stdout
-    const truncated = patch.length > PATCH_CAP_CHARS
-    return {
-      ...meta,
-      files: parseNumstat(statResult.stdout),
-      patch: truncated ? patch.slice(0, PATCH_CAP_CHARS) : patch,
-      truncated,
+    if (meta === null) {
+      // No detail is going to be built, so the in-flight patch is pure waste.
+      patchController.abort()
+      return null
     }
+    const files = parseNumstat(statResult.stdout)
+    let detail: CommitDetail
+    if (shouldSkipCommitPatch(files)) {
+      // Abort WITHOUT awaiting: waiting for the spawn to die would keep the very
+      // latency this path exists to remove. `--raw` is one metadata pass (measured
+      // 123ms/843KB against the patch's 242ms/3.4MB for the same 12_593-file
+      // commit) and is the only source of `status` once there is no patch.
+      patchController.abort()
+      const rawResult = await this.runner.run(showRawStatusArgv(oid), root, signal)
+      const statuses = rawResult.exitCode === 0
+        ? parseRawStatus(rawResult.stdout)
+        : new Map<string, CommitFileStatus>()
+      detail = {
+        ...meta,
+        files: files.map(file => {
+          const status = statuses.get(file.path)
+          // A path the raw read did not name keeps no status rather than a guessed
+          // one; the two argv builders agree on --first-parent/--no-renames, so in
+          // practice every numstat row has a record.
+          return status === undefined ? file : { ...file, status }
+        }),
+        // The patch text is absent, not empty, so `truncated` carries that: the
+        // client opens whichever file it needs through the per-file route.
+        patch: '',
+        truncated: true,
+      }
+    } else {
+      const patch = (await patchRead)?.stdout ?? ''
+      const truncated = patch.length > PATCH_CAP_CHARS
+      detail = {
+        ...meta,
+        files,
+        patch: truncated ? patch.slice(0, PATCH_CAP_CHARS) : patch,
+        truncated,
+      }
+    }
+    // Only a completed answer is remembered: an aborted call says nothing about the
+    // commit, the same rule the root and remote memos follow.
+    if (signal?.aborted !== true) this.rememberDetail(cacheKey, detail)
+    return detail
   }
 
   /**

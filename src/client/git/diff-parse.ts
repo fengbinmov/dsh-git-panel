@@ -13,6 +13,8 @@
  * @module dsh-git-panel/client/git/diff-parse
  */
 
+import type { CommitFileStatus } from '../../core/types.ts'
+
 /** How a file changed inside one commit. */
 export type FileDiffStatus = 'added' | 'deleted' | 'renamed' | 'binary' | 'modified'
 
@@ -323,12 +325,28 @@ export interface ReviewFile {
  * Join the host's per-file statistics with the parsed sections, so the list shows
  * every changed file even when the patch was truncated, and a rename contributes
  * one row rather than the delete+add pair `--numstat --no-renames` reports.
+ *
+ * A file no section covers falls back to whatever the host said about it: its
+ * `status` when a large commit's fast path filled one in, and otherwise the
+ * binary-or-modified reading numstat alone supports. The section, when there is
+ * one, still wins — its headers are the more precise source.
  * @param files - the commit's file statistics (`git show --numstat`).
  * @param sections - the parsed patch sections.
  * @returns the files to list, in the patch's order, with stat-only files appended.
  */
 export function reviewFiles(
-  files: readonly { path: string; additions: number; deletions: number; binary: boolean }[],
+  files: readonly {
+    path: string
+    additions: number
+    deletions: number
+    binary: boolean
+    /**
+     * The change kind when the host said it outright, which only its large-commit
+     * fast path does: that path sends no patch, so the section headers are not
+     * there to read the status from and this is all a row has.
+     */
+    status?: CommitFileStatus
+  }[],
   sections: readonly FileDiff[],
 ): ReviewFile[] {
   const byPath = new Map(files.map(file => [file.path, file]))
@@ -353,7 +371,14 @@ export function reviewFiles(
   const renamedFrom = new Set(sections.map(section => section.origPath).filter(path => path !== undefined))
   for (const file of files) {
     if (listed.has(file.path) || renamedFrom.has(file.path)) continue
-    rows.push({ ...file, status: file.binary ? 'binary' : 'modified', diff: null })
+    rows.push({
+      ...file,
+      // The host's own status wins when it sent one: the fast path has no patch to
+      // read a `new file mode`/`deleted file mode` header from, and a badge that
+      // said "modified" for every one of thousands of deletions would be a lie.
+      status: file.status ?? (file.binary ? 'binary' : 'modified'),
+      diff: null,
+    })
   }
   return rows
 }

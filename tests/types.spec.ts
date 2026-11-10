@@ -6,8 +6,9 @@
  */
 import { describe, expect, it } from 'vitest'
 import {
-  isBinaryPatch, isCommitDiff, isStatusFilesView, operationNameFromMarkers, parseAheadBehind, parseBranches,
-  parseHistory, parseNumstat, parseRemotes, parseShowMeta, parseStatPatch, parseStatusV2, parseTreeSize,
+  isBinaryPatch, isCommitDiff, isCommitFileStat, isStatusFilesView, operationNameFromMarkers,
+  parseAheadBehind, parseBranches, parseHistory, parseNumstat, parseRawStatus, parseRemotes, parseShowMeta,
+  parseStatPatch, parseStatusV2, parseTreeSize,
   predictCommitted, predictDiscarded, predictLineSelection, predictStaged, withLineStats,
   type FileChange, type StatusFilesView,
 } from '../src/core/types.ts'
@@ -379,6 +380,50 @@ describe('parseNumstat', () => {
       { path: 'a.txt', additions: 1, deletions: 2, binary: false },
       { path: 'img.png', additions: 0, deletions: 0, binary: true },
     ])
+  })
+})
+
+describe('parseRawStatus', () => {
+  it('pairs each status field with the path after it', () => {
+    // The shape the pinned `-z` argv produces (measured): `:<oldmode> <newmode>
+    // <oldsha> <newsha> <status>`, then NUL, then the path — no TAB, no newline.
+    const stdout = `:000000 100644 0000000 6868963 A${NUL}Assets/Art/pic.png${NUL}`
+      + `:100644 000000 6868963 0000000 D${NUL}gone.txt${NUL}`
+      + `:100644 100644 5aaac1c cb122ea M${NUL}dir/file with space.txt${NUL}`
+    expect(parseRawStatus(stdout)).toEqual(new Map([
+      ['Assets/Art/pic.png', 'added'],
+      ['gone.txt', 'deleted'],
+      ['dir/file with space.txt', 'modified'],
+    ]))
+  })
+
+  it('takes the path after a meta field, so a path starting with a colon is safe', () => {
+    expect(parseRawStatus(`:100644 100644 1111111 2222222 M${NUL}:weird.txt${NUL}`))
+      .toEqual(new Map([[':weird.txt', 'modified']]))
+  })
+
+  it('reads a type change as a modification and ignores records without a path', () => {
+    expect(parseRawStatus(`:100644 120000 1111111 2222222 T${NUL}link${NUL}`))
+      .toEqual(new Map([['link', 'modified']]))
+    expect(parseRawStatus(`garbage${NUL}:100644 100644 1 2 M${NUL}`)).toEqual(new Map())
+    expect(parseRawStatus('')).toEqual(new Map())
+  })
+})
+
+describe('isCommitFileStat', () => {
+  const stat = (over: Record<string, unknown> = {}): unknown =>
+    ({ path: 'a.txt', additions: 1, deletions: 0, binary: false, ...over })
+
+  it('tolerates the optional status the fast path adds', () => {
+    expect(isCommitFileStat(stat())).toBe(true)
+    expect(isCommitFileStat(stat({ status: 'added' }))).toBe(true)
+    expect(isCommitFileStat(stat({ status: 'deleted' }))).toBe(true)
+    expect(isCommitFileStat(stat({ status: 'modified' }))).toBe(true)
+  })
+
+  it('rejects an unknown status and a missing count', () => {
+    expect(isCommitFileStat(stat({ status: 'renamed' }))).toBe(false)
+    expect(isCommitFileStat(stat({ additions: undefined }))).toBe(false)
   })
 })
 

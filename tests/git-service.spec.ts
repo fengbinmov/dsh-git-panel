@@ -12,7 +12,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { GitService, gitSpawnArgv, type GitRunner, type GitRunResult, type WorkspaceGate } from '../src/host/git-service.ts'
+import {
+  COMMIT_DETAIL_MAX_CHANGED_LINES, COMMIT_DETAIL_MAX_FILES, GitService, gitSpawnArgv, shouldSkipCommitPatch,
+  type GitRunner, type GitRunResult, type WorkspaceGate,
+} from '../src/host/git-service.ts'
+import type { CommitFileStat } from '../src/core/types.ts'
 
 const execFileAsync = promisify(execFile)
 
@@ -453,6 +457,36 @@ describe('GitService', () => {
   })
 
   describe('history and commit detail', () => {
+    const NUL = '\u0000'
+
+    /**
+     * Real git, plus the answers this suite cannot cheaply produce: a
+     * pathological numstat/raw fixture, and a patch that only settles when it is
+     * cancelled. Every argv is recorded, so a test can prove WHICH spawns ran
+     * instead of inferring it from a duration.
+     */
+    function fastPathRunner(fixture: {
+      numstat?: string
+      raw?: string
+      patch?: (signal: AbortSignal | undefined) => Promise<GitRunResult>
+    }): { runner: GitRunner; spawns: string[][] } {
+      const spawns: string[][] = []
+      const wrapped: GitRunner = {
+        async run(argv, cwd, signal) {
+          spawns.push([...argv])
+          if (fixture.numstat !== undefined && argv.includes('--numstat')) {
+            return { exitCode: 0, stdout: fixture.numstat, stderr: '' }
+          }
+          if (fixture.raw !== undefined && argv.includes('--raw')) {
+            return { exitCode: 0, stdout: fixture.raw, stderr: '' }
+          }
+          if (fixture.patch !== undefined && argv.includes('--patch')) return fixture.patch(signal)
+          return runner.run(argv, cwd, signal)
+        },
+      }
+      return { runner: wrapped, spawns }
+    }
+
     it('pages history and renders one commit', async () => {
       await writeFile(join(repo, 'a.txt'), 'two\n')
       await service.stage(repo, ['a.txt'])
@@ -596,6 +630,91 @@ describe('GitService', () => {
         expect(one?.before).toBeNull()
         expect(one?.after).toBe('from feature\n'.length)
       }
+    })
+
+    it('takes the fast path on either threshold', () => {
+      const rows = (count: number, additions: number): CommitFileStat[] =>
+        Array.from({ length: count }, (_, index) => ({
+          path: `f${index}.txt`, additions, deletions: 0, binary: false,
+        }))
+      expect(shouldSkipCommitPatch(rows(COMMIT_DETAIL_MAX_FILES, 0))).toBe(false)
+      expect(shouldSkipCommitPatch(rows(COMMIT_DETAIL_MAX_FILES + 1, 0))).toBe(true)
+      // The line limit is independent of the file limit: a couple of huge files
+      // reach it while the file count stays tiny.
+      const half = COMMIT_DETAIL_MAX_CHANGED_LINES / 2
+      expect(shouldSkipCommitPatch(rows(2, half))).toBe(false)
+      expect(shouldSkipCommitPatch(rows(2, half + 1))).toBe(true)
+    })
+
+    it('skips a huge commit patch and fills status from --raw', async () => {
+      const oid = (await service.history(repo, 1, 0))?.commits[0]?.oid ?? ''
+      // The pathological commit is FABRICATED: seeding 2001 real files would cost
+      // the suite far more than the code under test. What is pinned is the wiring —
+      // numstat decides, the patch is cancelled, and raw supplies the file kinds.
+      const count = COMMIT_DETAIL_MAX_FILES + 1
+      const paths = Array.from({ length: count }, (_, index) => `bulk/f${index}.txt`)
+      const numstat = paths.map(path => `1\t0\t${path}`).join(NUL) + NUL
+      // All three kinds, so the badge mapping is actually exercised.
+      const kinds = ['A', 'D', 'M']
+      const raw = paths.map((path, index) =>
+        `:000000 100644 0000000 6868963 ${kinds[index] ?? 'M'}${NUL}${path}${NUL}`).join('')
+      const patch = (signal: AbortSignal | undefined) => new Promise<GitRunResult>((_, reject) => {
+        // Only an abort settles this, so a fast path that still waited for the
+        // patch text would time this test out — which is exactly the regression.
+        if (signal === undefined) return
+        signal.addEventListener('abort', () => reject(new Error('patch cancelled')), { once: true })
+      })
+      const { runner: wrapped, spawns } = fastPathRunner({ numstat, raw, patch })
+      const fastService = new GitService(wrapped, allowGate(repo))
+
+      const detail = await fastService.commitDetail(repo, oid)
+      if (detail === null) throw new Error('no detail')
+      expect(detail.files).toHaveLength(count)
+      expect(detail.files.slice(0, 3).map(file => file.status)).toEqual(['added', 'deleted', 'modified'])
+      expect(detail.patch).toBe('')
+      expect(detail.truncated).toBe(true)
+      // The patch was STARTED (it overlaps the cheap reads) and then abandoned;
+      // the raw read is what replaced it.
+      expect(spawns.some(args => args.includes('--patch'))).toBe(true)
+      expect(spawns.some(args => args.includes('--raw'))).toBe(true)
+    })
+
+    it('keeps the full patch for an ordinary commit', async () => {
+      await writeFile(join(repo, 'a.txt'), 'two\n')
+      await service.stage(repo, ['a.txt'])
+      expect((await service.commit(repo, 'second')).ok).toBe(true)
+      const oid = (await service.history(repo, 1, 0))?.commits[0]?.oid ?? ''
+      const { runner: wrapped, spawns } = fastPathRunner({})
+      const plainService = new GitService(wrapped, allowGate(repo))
+
+      const detail = await plainService.commitDetail(repo, oid)
+      expect(detail?.patch).toContain('+two')
+      expect(detail?.truncated).toBe(false)
+      // No --raw read: the full patch carries the kinds, and the guard never fired.
+      expect(spawns.some(args => args.includes('--raw'))).toBe(false)
+      expect(detail?.files[0]?.status).toBeUndefined()
+    })
+
+    it('answers a repeated read of one commit without spawning git again', async () => {
+      const oid = (await service.history(repo, 1, 0))?.commits[0]?.oid ?? ''
+      const { runner: wrapped, spawns } = fastPathRunner({})
+      const cachedService = new GitService(wrapped, allowGate(repo))
+
+      const first = await cachedService.commitDetail(repo, oid)
+      if (first === null) throw new Error('no detail')
+      const afterFirst = spawns.length
+      expect(afterFirst).toBeGreaterThan(1)
+
+      const second = await cachedService.commitDetail(repo, oid)
+      expect(second).toEqual(first)
+      // The SSE refresh and a re-opened History tab re-read the same immutable
+      // commit: the second read must cost no spawn at all, not even the root probe.
+      expect(spawns.length).toBe(afterFirst)
+
+      // The cache never short-circuits validation: a non-hex id is rejected before
+      // any lookup, and still costs nothing.
+      expect(await cachedService.commitDetail(repo, 'not-an-oid')).toBeNull()
+      expect(spawns.length).toBe(afterFirst)
     })
 
     it('validates both the object id and the path before either reaches argv', async () => {

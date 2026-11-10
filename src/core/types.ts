@@ -241,6 +241,15 @@ export interface HistoryView {
   hasMore: boolean
 }
 
+/**
+ * How one commit changed one path, at the granularity a file badge can show.
+ *
+ * Coarser than {@link FileChangeKind} on purpose: this only ever comes out of one
+ * commit's `--raw` records, where a rename is already resolved into an add plus a
+ * delete (`--no-renames`) and the remaining kinds are these three.
+ */
+export type CommitFileStatus = 'added' | 'deleted' | 'modified'
+
 /** One changed file inside a commit (`git show --numstat`). */
 export interface CommitFileStat {
   path: string
@@ -248,6 +257,15 @@ export interface CommitFileStat {
   deletions: number
   /** True for binary content (git prints '-' for both counts). */
   binary: boolean
+  /**
+   * Change kind, from the commit's `--raw` records.
+   *
+   * Absent on the ordinary path: the numstat record says nothing about the kind,
+   * and the commit-wide patch the client renders carries it in its diff headers.
+   * The large-commit fast path sends no patch, so it fills this in from one extra
+   * `--raw` read — the file badges stay right without generating the patch.
+   */
+  status?: CommitFileStatus
 }
 
 /** One commit's full detail. */
@@ -858,6 +876,43 @@ export function parseNumstat(stdout: string): CommitFileStat[] {
 }
 
 /**
+ * The change kind one `--raw` status field stands for.
+ *
+ * `--no-renames` is pinned by the argv builder, so `A`, `D` and `M` cover every
+ * record of an ordinary commit; a type change (`T`), an unmerged path (`U`) and
+ * anything else still CHANGED the file, which is all a badge can say about it.
+ */
+function rawStatusKind(letter: string | undefined): CommitFileStatus {
+  if (letter === 'A') return 'added'
+  if (letter === 'D') return 'deleted'
+  return 'modified'
+}
+
+/**
+ * Parse `git show --raw -z --format=` into one status per path.
+ *
+ * The record is `:<oldmode> <newmode> <oldsha> <newsha> <status>` followed by NUL
+ * and the path, with no newline anywhere in a `-z` stream: the whole output is
+ * `:<meta>\0path\0:<meta>\0path\0…`. The path field is taken as the field AFTER a
+ * meta field, so a path that itself starts with `:` can never be mistaken for the
+ * start of a record. A map is the shape the caller wants: the fast path looks up
+ * one status per numstat row.
+ */
+export function parseRawStatus(stdout: string): Map<string, CommitFileStatus> {
+  const statuses = new Map<string, CommitFileStatus>()
+  const fields = stdout.split('\u0000')
+  for (let index = 0; index < fields.length; index += 1) {
+    const match = /^:([0-7]+) ([0-7]+) ([0-9a-f]+) ([0-9a-f]+) ([A-Z])/.exec(fields[index] ?? '')
+    if (match === null) continue
+    const path = fields[index + 1]
+    if (path === undefined || path === '') continue
+    index += 1
+    statuses.set(path, rawStatusKind(match[5]))
+  }
+  return statuses
+}
+
+/**
  * The byte size out of ONE `git ls-tree -l -z` record, or null when git reported none.
  *
  * The record is `<mode> SP <type> SP <object> SP <size> TAB <path>`, with the size
@@ -1035,10 +1090,14 @@ export function isHistoryView(value: unknown): value is HistoryView {
 export function isCommitFileStat(value: unknown): value is CommitFileStat {
   if (typeof value !== 'object' || value === null) return false
   const record = value as Record<string, unknown>
+  // `status` is optional: only the large-commit fast path fills it in.
+  const status = record.status
+  const statusOk = status === undefined || status === 'added' || status === 'deleted' || status === 'modified'
   return typeof record.path === 'string'
     && typeof record.additions === 'number'
     && typeof record.deletions === 'number'
     && typeof record.binary === 'boolean'
+    && statusOk
 }
 
 /** Narrow an unknown value onto {@link CommitDetail}. */

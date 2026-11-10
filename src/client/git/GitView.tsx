@@ -72,6 +72,14 @@ const INFO_NOTICE_MS = 4_000
 const PEEK_DELAY_MS = 90
 
 /**
+ * How many commit details to keep for re-selection (see `commitCache`).
+ *
+ * Deliberately small: one detail can carry a patch of up to 400 KB, and the point
+ * is only to make re-opening the commit a tab is already looking at free.
+ */
+const COMMIT_CACHE_LIMIT = 6
+
+/**
  * How long a wait has to last before the preview says it is loading (ms).
  *
  * A patch that arrives in the next frame must not flash 加载中 at the user first —
@@ -189,6 +197,18 @@ export function GitView(props: GitViewProps) {
   /** The loaded commit detail as a ref, so the effect can tell "keep" from "start empty". */
   const detailRef = useRef<CommitDetail | null>(null)
   detailRef.current = detail
+  /**
+   * Commit details already fetched, keyed by oid.
+   *
+   * A commit's content is fixed the moment its id exists, so the same oid always
+   * resolves to the same detail — which makes the object itself reusable, not just
+   * its bytes. Reusing the OBJECT is what matters: CommitReview derives its file
+   * list and patch sections with memos keyed on the detail, so handing it a fresh
+   * object on every SSE refresh re-split a patch of up to 400 KB and re-rendered
+   * the whole list for a commit that had not changed. The bound is small because
+   * of that patch text.
+   */
+  const commitCache = useRef(new Map<string, CommitDetail>())
   const peekTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   /**
    * Both sides' patches, exactly as the last refresh handed them over.
@@ -413,6 +433,24 @@ export function GitView(props: GitViewProps) {
     if (peekTimer.current !== null) clearTimeout(peekTimer.current)
   }, [])
 
+  /**
+   * Remember one fetched commit, dropping the least recently used beyond the bound.
+   * @param commitOid - the commit's id, the cache key.
+   * @param next - the detail to keep.
+   */
+  const rememberCommit = useCallback((commitOid: string, next: CommitDetail): void => {
+    const cache = commitCache.current
+    // Deleted before setting so a hit moves to the end: Map iteration is insertion
+    // order, which is what the eviction below reads as "least recently used".
+    cache.delete(commitOid)
+    cache.set(commitOid, next)
+    while (cache.size > COMMIT_CACHE_LIMIT) {
+      const oldest = cache.keys().next().value
+      if (oldest === undefined) break
+      cache.delete(oldest)
+    }
+  }, [])
+
   // Detail data follows the selection. Each fetch is guarded by `live` so a
   // fast re-selection cannot let an older response overwrite a newer one.
   useEffect(() => {
@@ -464,19 +502,37 @@ export function GitView(props: GitViewProps) {
     // commit has nothing worth keeping and still starts empty.
     const keep = reviewKey.current === selection.oid && detailRef.current !== null
     reviewKey.current = selection.oid
+    // A commit already fetched is immutable by id, so re-selecting it can reuse the
+    // detail outright: no request, and — because the review's memos key on the
+    // detail object — no re-parse of its patch and no re-render of its file list.
+    const cached = commitCache.current.get(selection.oid)
+    if (cached !== undefined) {
+      // Re-inserted so it is counted as recently used, not evicted first.
+      rememberCommit(selection.oid, cached)
+      setDetail(cached)
+      setDetailLoading(false)
+      if (!keep) setDiff(null)
+      return undefined
+    }
     setDetailLoading(true)
     if (!keep) {
       setDetail(null)
       setDiff(null)
     }
     void props.commitDetail(sessionId, selection.oid)
-      .then(next => { if (live) setDetail(next) })
+      .then((next) => {
+        if (!live) return
+        setDetail(next)
+        // Only a real answer is worth remembering: null means the commit is gone,
+        // and a rejection has no detail at all.
+        if (next !== null) rememberCommit(selection.oid, next)
+      })
       // A failed refresh keeps the last known answer on screen rather than
       // replacing it with an empty pane the user did not ask for.
       .catch(() => { if (live && !keep) setDetail(null) })
       .finally(() => { if (live) setDetailLoading(false) })
     return () => { live = false }
-  }, [selection, revision, loadDiff, fromBatch, props.commitDetail, sessionId])
+  }, [selection, revision, loadDiff, fromBatch, props.commitDetail, sessionId, rememberCommit])
 
   const loadHistory = useCallback((skip: number): void => {
     setHistoryLoading(true)

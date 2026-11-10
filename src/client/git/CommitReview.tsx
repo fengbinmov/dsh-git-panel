@@ -24,7 +24,18 @@ import { formatBytes } from './helpers.ts'
 import { FilePathCell, FileRowBody, FileStatCell } from './FileRow.tsx'
 import { usePaneSplit } from './pane-split.ts'
 import { useCommitFileDiff } from './use-commit-diff.ts'
+import { useVirtualWindow } from './virtual-window.ts'
 import css from './git.module.css'
+
+/**
+ * The height of one review file row, in pixels.
+ *
+ * The file list is virtualized with fixed rows, so this number has to be the row
+ * height in CSS too (`.fixedFileRow` in git.module.css). A mismatch does not make
+ * the rows merely look off — the spacer heights stop adding up and the scrollbar
+ * points at the wrong row.
+ */
+const FILE_ROW_HEIGHT = 22
 
 /** Props of the commit review. */
 export interface CommitReviewProps {
@@ -79,6 +90,16 @@ export function CommitReview({ detail, loading, commitDiff, root, t }: CommitRev
   )
   /** Index by path, so picking a file is a lookup rather than a scan of every row. */
   const byPath = useMemo(() => new Map(files.map(file => [file.path, file])), [files])
+  /**
+   * The slice of rows on screen. A commit can list over ten thousand files, and
+   * one DOM row each is what made opening such a commit take seconds — the list is
+   * virtualized, and only the visible rows plus a little overscan are mounted.
+   */
+  const virtual = useVirtualWindow({ count: files.length, rowHeight: FILE_ROW_HEIGHT, resetKey: oid })
+  const visible = useMemo(
+    () => files.slice(virtual.start, virtual.end),
+    [files, virtual.start, virtual.end],
+  )
   /** The file whose diff is on show; null means "the first one". */
   const [picked, setPicked] = useState<string | null>(null)
   const panes = usePaneSplit('review', root)
@@ -160,8 +181,15 @@ export function CommitReview({ detail, loading, commitDiff, root, t }: CommitRev
       <div className={css.reviewRow} style={panes.style}>
         <div className={css.filesPane} data-gitgraph-part="review-files">
           <div className={css.filesHead}>{t('git.review.count', { count: files.length })}</div>
-          <div className={css.filesScroll}>
-            {files.map((file) => {
+          <div className={css.filesScroll} ref={virtual.containerRef} data-gitgraph-review-scroll>
+            {files.length === 0 && <div className={css.empty}>{t('git.review.empty')}</div>}
+            {/* The spacers are what keep the scrollbar honest: the rendered rows
+                are a window, but the scrolled content has to be as tall as the
+                whole list, so the two heights stand in for the rows not mounted. */}
+            {files.length > 0 && (
+              <div aria-hidden="true" style={{ height: virtual.paddingTop }} />
+            )}
+            {visible.map((file) => {
               const badge = statusBadgeOf(file.status)
               const isActive = active !== undefined && active.path === file.path
               return (
@@ -170,7 +198,7 @@ export function CommitReview({ detail, loading, commitDiff, root, t }: CommitRev
                   role="button"
                   tabIndex={0}
                   aria-pressed={isActive}
-                  className={`${css.fileRow ?? ''} ${isActive ? css.fileRowActive ?? '' : ''}`.trim()}
+                  className={`${css.fileRow ?? ''} ${css.fixedFileRow ?? ''} ${isActive ? css.fileRowActive ?? '' : ''}`.trim()}
                   data-gitgraph-review-file={file.path}
                   onClick={() => { setPicked(file.path) }}
                   onKeyDown={(event) => {
@@ -191,7 +219,9 @@ export function CommitReview({ detail, loading, commitDiff, root, t }: CommitRev
                 </div>
               )
             })}
-            {files.length === 0 && <div className={css.empty}>{t('git.review.empty')}</div>}
+            {files.length > 0 && (
+              <div aria-hidden="true" style={{ height: virtual.paddingBottom }} />
+            )}
           </div>
         </div>
         {/* The divider owns the boundary between the file list and the diff. */}

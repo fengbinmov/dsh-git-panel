@@ -48,7 +48,18 @@ import {
 } from './helpers.ts'
 import { commitDraft, clearCommitDraft, rememberCommitDraft } from './commit-draft.ts'
 import { FileRowBody } from './FileRow.tsx'
+import { useVirtualWindow, type VirtualWindowHandle } from './virtual-window.ts'
 import css from './git.module.css'
+
+/**
+ * The height of one change row, in pixels.
+ *
+ * Both groups are virtualized with fixed rows, so a row's offset is
+ * index × height rather than a measurement, and this number has to be the row
+ * height in CSS too (`.fixedFileRow`). A mismatch makes the spacer heights stop
+ * adding up and the scrollbar point at the wrong rows.
+ */
+const FILE_ROW_HEIGHT = 22
 
 /** The selection the detail pane is currently showing, if any. */
 export interface FileSelection {
@@ -257,6 +268,37 @@ export function ChangesPanel(props: ChangesPanelProps) {
   // Rebuilt only when the status itself changes: a drag repaints this panel on
   // every group crossing, and re-deriving the groups each time is wasted work.
   const sections = useMemo(() => buildSections(status, t), [status, t])
+  /** Each group's rows, keyed so the per-group window below can find its list. */
+  const rowsByGroup = useMemo(() => {
+    const map: Record<ChangeGroupKey, readonly FileChange[]> = { unstaged: [], staged: [] }
+    for (const section of sections) map[section.key] = section.rows
+    return map
+  }, [sections])
+  /**
+   * The rows each group mounts at once.
+   *
+   * A worktree can hold thousands of changes at a time — a branch switch, a bulk
+   * delete, a vendored tree appearing — and the list used to mount one row per
+   * change in BOTH groups. Creating and then re-reconciling tens of thousands of
+   * nodes is what made the panel crawl under such a worktree, and every optimistic
+   * update re-rendered them all. Each group is now windowed on the fixed row
+   * height, with two spacers standing in for the rows outside the viewport.
+   *
+   * One window per group rather than one shared list: the groups scroll their own
+   * `.groupRows` element, so each has its own offset and viewport. The group set is
+   * fixed ({@link CHANGE_GROUP_ORDER}), which is what lets these two calls sit at
+   * the top level instead of inside the render loop.
+   */
+  const unstagedWindow = useVirtualWindow({
+    count: rowsByGroup.unstaged.length, rowHeight: FILE_ROW_HEIGHT, resetKey: status.root,
+  })
+  const stagedWindow = useVirtualWindow({
+    count: rowsByGroup.staged.length, rowHeight: FILE_ROW_HEIGHT, resetKey: status.root,
+  })
+  const groupWindows: Record<ChangeGroupKey, VirtualWindowHandle> = {
+    unstaged: unstagedWindow,
+    staged: stagedWindow,
+  }
   /** Each rendered group's weight in the list's flex column, before scaling. */
   const weights = sections.map(section => shareOf(section.key, section.rows.length, shares))
   /** The one multiplier that lets those weights fill the list exactly. */
@@ -601,6 +643,7 @@ export function ChangesPanel(props: ChangesPanelProps) {
             precisely and without taking height from the groups. */}
         {sections.map((section, index) => {
           const previous = index === 0 ? undefined : sections[index - 1]
+          const groupWindow = groupWindows[section.key]
           const plan = drag === null ? null : dropPaths(drag.payload, section.key)
           const armed = plan !== null
           const hovered = dragOver === section.key
@@ -678,8 +721,16 @@ export function ChangesPanel(props: ChangesPanelProps) {
                     below it at larger shares is space the user can hand back by
                     dragging the divider. */}
                 {!empty && (
-                  <div className={css.groupRows}>
-                  {section.rows.map(file => {
+                  <div
+                    className={css.groupRows}
+                    ref={groupWindow.containerRef}
+                    data-gitgraph-changes-scroll={section.key}
+                  >
+                    {/* The spacers stand in for the rows outside the viewport, so the
+                        scrollbar stays proportional to the whole group while only the
+                        window around it is mounted. */}
+                    <div aria-hidden="true" style={{ height: groupWindow.paddingTop }} />
+                    {section.rows.slice(groupWindow.start, groupWindow.end).map(file => {
                     const key = rowKey(section.key, file.path)
                     const active = selected !== null && selected.path === file.path && selected.staged === section.staged
                     const isSelected = selection.includes(key)
@@ -689,6 +740,7 @@ export function ChangesPanel(props: ChangesPanelProps) {
                     const draggable = !file.conflicted && !busy
                     const rowClass = [
                       css.fileRow,
+                      css.fixedFileRow,
                       isSelected ? css.fileRowSelected : '',
                       active ? css.fileRowActive : '',
                       draggable ? css.fileRowDraggable : '',
@@ -756,7 +808,8 @@ export function ChangesPanel(props: ChangesPanelProps) {
                       </div>
                     )
                   })}
-                </div>
+                    <div aria-hidden="true" style={{ height: groupWindow.paddingBottom }} />
+                  </div>
                 )}
               </div>
             </Fragment>

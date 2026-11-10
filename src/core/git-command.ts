@@ -234,6 +234,25 @@ export const showStatArgv = (oid: string): string[] => [...UNQUOTED,
 ]
 
 /**
+ * `git show --raw -z --format= --first-parent --no-renames` — one commit's
+ * changed paths with their change KIND, and no content.
+ *
+ * This is the badge-preserving half of the large-commit fast path: the commit-wide
+ * patch is what costs seconds on a commit touching thousands of files, but the
+ * review still has to say which files were added, deleted or modified. A raw
+ * record is one line of metadata per path — measured 843KB/123ms for a 12_593-file
+ * commit, against 3.4MB/242ms for the patch on the same machine — and it is what
+ * `--numstat` cannot answer, since numstat counts lines and never names the kind.
+ *
+ * `--first-parent`/`--no-renames` match {@link showStatArgv} exactly, so the
+ * record set lines up one-to-one with the numstat rows and every rename is already
+ * resolved into an add plus a delete.
+ */
+export const showRawStatusArgv = (oid: string): string[] => [...UNQUOTED,
+  'show', '--raw', '-z', '--format=', '--first-parent', '--no-renames', oid,
+]
+
+/**
  * `git show --patch --first-parent` — one commit's unified diff.
  *
  * `--first-parent` is what makes a MERGE commit readable at all. Without it git

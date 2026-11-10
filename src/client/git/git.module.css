@@ -928,6 +928,21 @@
   overscroll-behavior: contain;
 }
 
+/* One row of a virtualized file list. Both lists that can grow to thousands of
+   rows — the commit review's changed files and the change list's two groups — are
+   windowed with FIXED rows: only the rows around the viewport are mounted, and a
+   row's offset is index × height rather than a measurement. So the height has to
+   be exact. Keep in sync with FILE_ROW_HEIGHT in CommitReview.tsx and
+   ChangesPanel.tsx: the spacer heights are derived from it, and a mismatch would
+   scroll to the wrong rows. box-sizing keeps the row's vertical padding inside
+   the 22px (2+2 around an 18px line box), and overflow keeps a long path from
+   making one row taller than the rest. */
+.fixedFileRow {
+  height: 22px;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
 /* One changed file: status badge, path with the basename emphasised, +/- counts.
    The path cell and the counts are the shared .filePath / .fileStat above —
    the review list and the Changes list are the same row. */

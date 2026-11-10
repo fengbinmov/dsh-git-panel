@@ -5,10 +5,13 @@
  * and the commit box. It is a pure props component — every git verb is injected
  * by the view root.
  *
- * Selection follows the file-manager convention: a plain click selects one row,
- * Ctrl/Cmd+click toggles a row, Shift+click extends from the anchor across the
- * flattened row order (which may span groups). Dragging then moves the whole
- * selection in one gesture.
+ * Selection follows the file-manager convention — a plain click selects one row,
+ * Ctrl/Cmd+click toggles a row, Shift+click extends from the anchor — with ONE
+ * restriction: a selection never spans the two regions. Their verbs differ
+ * (discard on the pending side, unstage on the staged side), so a Ctrl/Cmd or
+ * Shift gesture that crosses the boundary drops the selection it was extending
+ * and starts over on the row that was clicked. Dragging then moves the whole
+ * (single-region) selection in one gesture.
  *
  * There are exactly TWO groups, one per side of the index: everything not staged
  * (untracked files, worktree modifications, unresolved conflicts) and everything
@@ -26,8 +29,8 @@
  * text and takes a smaller share, because the height its files would have needed
  * belongs to the group that has some.
  *
- * The per-row buttons stay because they are the keyboard-accessible route to
- * the same two verbs, and the group bulk buttons stay for whole-group moves.
+ * The group bulk buttons stay for whole-group moves; the keyboard is the
+ * per-row route to the same two verbs (there are no per-row buttons).
  * @module dsh-git-panel/client/git/ChangesPanel
  */
 
@@ -279,9 +282,11 @@ export function ChangesPanel(props: ChangesPanelProps) {
   }
 
   // Selectable rows in render order — the axis a Shift+click range runs along.
-  // A conflicted row is left out so a range never silently swallows a row with no
-  // staging verb; a plain click can still select one, which is why the payload
-  // build below refuses conflicted paths as well.
+  // Each region's rows are contiguous, and a range is only allowed inside one
+  // region (see handleRowClick), so slicing this list can never cross the
+  // boundary. A conflicted row is left out so a range never silently swallows a
+  // row with no staging verb; a plain click can still select one, which is why
+  // the payload build below refuses conflicted paths as well.
   const flatKeys = sections.flatMap(section => section.rows
     .filter(file => !file.conflicted)
     .map(file => rowKey(section.key, file.path)))
@@ -358,6 +363,16 @@ export function ChangesPanel(props: ChangesPanelProps) {
     })
   }, [status.root])
 
+  /**
+   * Add a click to the selection.
+   *
+   * A selection lives in exactly ONE region. The two regions carry different
+   * verbs — the pending side discards, the staged side unstages — so a
+   * selection spanning both could never be acted on as one thing, and every
+   * verb would have to split it again first. Ctrl/Cmd+click and Shift+click
+   * that cross the boundary therefore DROP the selection they were extending
+   * and start a fresh one on this row.
+   */
   const handleRowClick = useCallback((
     event: MouseEvent<HTMLDivElement>,
     key: string,
@@ -368,21 +383,40 @@ export function ChangesPanel(props: ChangesPanelProps) {
     // this gesture also changed the selection.
     onSelect({ path: file.path, staged: section.staged })
 
+    const group = section.key
+    /** The region the current selection lives in; undefined when there is none. */
+    const selectedGroup = selection.length === 0 ? undefined : rowsByKey.get(selection[0])?.group
+
     if (event.shiftKey && anchor !== null) {
-      const from = flatKeys.indexOf(anchor)
-      const to = flatKeys.indexOf(key)
-      if (from !== -1 && to !== -1) {
-        const [low, high] = from <= to ? [from, to] : [to, from]
-        setSelection(flatKeys.slice(low, high + 1))
-        // The anchor deliberately stays put, so a further Shift+click re-ranges
-        // from the same origin instead of walking the range along.
-        return
+      // A range only means something inside one region: across the boundary the
+      // gesture restarts on this row instead of silently mixing verbs.
+      if (rowsByKey.get(anchor)?.group === group && selectedGroup === group) {
+        const from = flatKeys.indexOf(anchor)
+        const to = flatKeys.indexOf(key)
+        if (from !== -1 && to !== -1) {
+          const [low, high] = from <= to ? [from, to] : [to, from]
+          setSelection(flatKeys.slice(low, high + 1))
+          // The anchor deliberately stays put, so a further Shift+click re-ranges
+          // from the same origin instead of walking the range along.
+          return
+        }
       }
-      // The anchor's row is gone (its path moved groups): fall through to a
-      // plain click rather than leaving a stale selection behind.
+      // The anchor's row is gone (its path moved groups), or the anchor sits in
+      // the other region: fall through to a fresh one-row selection rather than
+      // leaving a stale cross-region selection behind.
+      setSelection([key])
+      setAnchor(key)
+      return
     }
 
     if (event.ctrlKey || event.metaKey) {
+      // Crossing the boundary replaces the selection, which is what keeps the
+      // result in one region.
+      if (selectedGroup !== group) {
+        setSelection([key])
+        setAnchor(key)
+        return
+      }
       setSelection(current => (current.includes(key) ? current.filter(entry => entry !== key) : [...current, key]))
       setAnchor(key)
       return
@@ -390,7 +424,7 @@ export function ChangesPanel(props: ChangesPanelProps) {
 
     setSelection([key])
     setAnchor(key)
-  }, [anchor, flatKeys, onSelect])
+  }, [anchor, flatKeys, onSelect, rowsByKey, selection])
 
   /**
    * Commit what is staged.
@@ -500,8 +534,11 @@ export function ChangesPanel(props: ChangesPanelProps) {
    *
    * It applies to the whole selection when the row is part of one, and it is not
    * confirmed: it is a single keystroke, and the panel already shows exactly
-   * which rows it will act on. A path selected on BOTH sides is only unstaged —
-   * discarding it too would throw away the edits the unstage just handed back.
+   * which rows it will act on. A selection never spans both regions, so a click
+   * on any row of it asks for exactly ONE verb; the by-region split below is
+   * only defensive, for a status refresh that moves rows while the gesture is
+   * in flight. The same file can still be listed on both sides (that is two
+   * different changes), but it can never be selected on both at once.
    */
   const requestDelete = useCallback((key: string): void => {
     if (busy) return
@@ -514,6 +551,9 @@ export function ChangesPanel(props: ChangesPanelProps) {
       if (row.group === 'staged') staged.push(row.path)
       else pending.push(row.path)
     }
+    // A refresh can move a path between regions under the selection; unstaging
+    // hands it back, so discarding the same path too would destroy what it
+    // returned. Race guard only — the selection itself stays in one region.
     const unstaged = new Set(staged)
     const discard = pending.filter(path => !unstaged.has(path))
     if (staged.length > 0) {

@@ -144,24 +144,52 @@ describe('Delete acts on the region the row is in', () => {
     expect(discarded).toEqual([])
   })
 
-  it('carries the whole selection, splitting it by region', () => {
-    const { rows, discarded, unstagedCalls } = mountWith([unstaged('a.ts'), unstaged('b.ts'), staged('c.ts')])
-    // Select all three: plain click, then Ctrl+click for the rest.
+  it('extends a range within one region', () => {
+    const { rows, discarded } = mountWith([unstaged('a.ts'), unstaged('b.ts'), unstaged('c.ts')])
     fireEvent.click(rows[0])
-    fireEvent.click(rows[1], { ctrlKey: true })
-    fireEvent.click(rows[2], { ctrlKey: true })
-    fireEvent.keyDown(rows[1], { key: 'Delete' })
-    expect(discarded).toEqual([['a.ts', 'b.ts']])
-    expect(unstagedCalls).toEqual([['c.ts']])
+    fireEvent.click(rows[2], { shiftKey: true })
+    fireEvent.keyDown(rows[2], { key: 'Delete' })
+    expect(discarded).toEqual([['a.ts', 'b.ts', 'c.ts']])
   })
 
-  it('never discards a path it is also unstaging', () => {
-    // A path staged AND further modified is selected on both sides: unstaging it
-    // hands the edits back, so discarding it too would destroy what it returned.
+  it('keeps a Ctrl+click multi-select inside one region', () => {
+    const { rows, discarded, unstagedCalls } = mountWith([unstaged('a.ts'), unstaged('b.ts'), staged('c.ts')])
+    fireEvent.click(rows[0])
+    fireEvent.click(rows[1], { ctrlKey: true })
+    fireEvent.keyDown(rows[1], { key: 'Delete' })
+    expect(discarded).toEqual([['a.ts', 'b.ts']])
+    expect(unstagedCalls).toEqual([])
+  })
+
+  it('drops the old region when a Ctrl+click crosses the boundary', () => {
+    const { rows, discarded, unstagedCalls } = mountWith([unstaged('a.ts'), unstaged('b.ts'), staged('c.ts')])
+    fireEvent.click(rows[0])
+    fireEvent.click(rows[1], { ctrlKey: true })
+    // Crossing over replaces the pending selection instead of extending it, so
+    // the selection always stays in one region.
+    fireEvent.click(rows[2], { ctrlKey: true })
+    fireEvent.keyDown(rows[2], { key: 'Delete' })
+    expect(unstagedCalls).toEqual([['c.ts']])
+    expect(discarded).toEqual([])
+  })
+
+  it('starts a fresh selection when Shift+click crosses the boundary', () => {
+    const { rows, discarded, unstagedCalls } = mountWith([unstaged('a.ts'), staged('c.ts'), staged('d.ts')])
+    fireEvent.click(rows[0])
+    fireEvent.click(rows[1], { shiftKey: true })
+    fireEvent.keyDown(rows[1], { key: 'Delete' })
+    expect(unstagedCalls).toEqual([['c.ts']])
+    expect(discarded).toEqual([])
+  })
+
+  it('cannot select a path on both sides at once', () => {
+    // A staged AND further modified path lists two rows, but a selection lives
+    // in one region: Ctrl+clicking the staged row replaces the pending one, so
+    // the two halves can never be acted on together.
     const { rows, discarded, unstagedCalls } = mountWith([addedThenEdited('package.json')])
     fireEvent.click(rows[0])
     fireEvent.click(rows[1], { ctrlKey: true })
-    fireEvent.keyDown(rows[0], { key: 'Delete' })
+    fireEvent.keyDown(rows[1], { key: 'Delete' })
     expect(unstagedCalls).toEqual([['package.json']])
     expect(discarded).toEqual([])
   })
